@@ -1,0 +1,21 @@
+# Cloudflare Worker configuration for AIOStreams proxy
+#
+# Usage:
+#   1. Install wrangler: npm install -g wrangler
+#   2. Login: wrangler login
+#   3. Set the secret: wrangler secret put CLOUD_RUN_URL
+#      (Enter your Cloud Run URL, e.g., https://aiostreams-xyz-ew.a.run.app)
+#   4. Update the route below with your domain
+#   5. Deploy: wrangler deploy
+
+name = "aiostreams-proxy"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# Configure your route - update with your domain
+# routes = [
+#   { pattern = "aiostreams.yourdomain.com/*", zone_name = "yourdomain.com" }
+# ]
+
+# The CLOUD_RUN_URL is stored as a secret, not here
+# Set it with: wrangler secret put CLOUD_RUN_URL

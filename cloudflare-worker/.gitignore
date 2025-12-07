@@ -1,0 +1,6 @@
+# Wrangler
+.wrangler/
+.dev.vars
+
+# Local config with your actual values
+wrangler.local.toml

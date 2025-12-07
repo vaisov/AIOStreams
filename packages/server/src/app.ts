@@ -41,6 +41,7 @@ import {
   staticRateLimiter,
   internalMiddleware,
   stremioStreamRateLimiter,
+  cfAccessMiddleware,
 } from './middlewares/index.js';
 
 import { constants, createLogger, Env } from '@aiostreams/core';
@@ -73,6 +74,7 @@ export const staticRoot = path.join(__dirname, './static');
 
 app.use(ipMiddleware);
 app.use(loggerMiddleware);
+app.use(cfAccessMiddleware);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

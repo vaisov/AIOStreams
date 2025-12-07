@@ -1990,4 +1990,22 @@ export const Env = cleanEnv(process.env, {
     default: 10, // allow 100 requests per IP per minute
     desc: 'Maximum number of requests allowed per IP within the time window',
   }),
+
+  // Cloudflare Access settings
+  CF_ACCESS_ENABLED: bool({
+    default: false,
+    desc: 'Enable Cloudflare Access authentication. When enabled, all requests must have valid CF-Access-JWT-Assertion header.',
+  }),
+  CF_ACCESS_TEAM_DOMAIN: str({
+    default: undefined,
+    desc: 'Your Cloudflare Access team domain (e.g., "myteam" for myteam.cloudflareaccess.com). Required when CF_ACCESS_ENABLED is true.',
+  }),
+  CF_ACCESS_AUD: str({
+    default: undefined,
+    desc: 'The Application Audience (AUD) tag from your Cloudflare Access application policy. Required when CF_ACCESS_ENABLED is true.',
+  }),
+  CF_ACCESS_BYPASS_PATHS: commaSeparated({
+    default: ['/api/v1/health'],
+    desc: 'Comma-separated list of paths that bypass Cloudflare Access authentication (e.g., health checks).',
+  }),
 });
