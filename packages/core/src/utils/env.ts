@@ -2008,4 +2008,12 @@ export const Env = cleanEnv(process.env, {
     default: ['/api/v1/health'],
     desc: 'Comma-separated list of paths that bypass Cloudflare Access authentication (e.g., health checks).',
   }),
+  CF_ACCESS_SERVICE_TOKEN_ID: str({
+    default: undefined,
+    desc: 'Service token Client ID for authenticating requests from Cloudflare Worker. Used when CF_ACCESS_ENABLED is true and you want to use service token auth instead of JWT.',
+  }),
+  CF_ACCESS_SERVICE_TOKEN_SECRET: str({
+    default: undefined,
+    desc: 'Service token Client Secret for authenticating requests from Cloudflare Worker. Used when CF_ACCESS_ENABLED is true and you want to use service token auth instead of JWT.',
+  }),
 });

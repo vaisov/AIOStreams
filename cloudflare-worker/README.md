@@ -4,12 +4,28 @@ This Cloudflare Worker acts as a reverse proxy to hide your Cloud Run URL from D
 
 ## Architecture
 
+### With Service Token (Recommended for Stremio)
+
 ```
 Stremio (Android TV)
         ↓
 aiostreams.yourdomain.com
         ↓
-Cloudflare Access (IP-based policy - checks if your home IP)
+Cloudflare Worker (injects service token headers)
+        ↓
+Cloud Run (hidden URL)
+        ↓
+AIOStreams App (verifies CF-Access-Client-Id/Secret headers)
+```
+
+### With Cloudflare Access (for browser-based clients)
+
+```
+Browser/App
+        ↓
+aiostreams.yourdomain.com
+        ↓
+Cloudflare Access (IP policy or user auth)
         ↓
 Cloudflare Worker (this proxy)
         ↓
@@ -72,12 +88,22 @@ routes = [
 ]
 ```
 
-### Step 4: Set the Cloud Run URL Secret
+### Step 4: Set Worker Secrets
 
 ```bash
 cd cloudflare-worker
+
+# Required: Your Cloud Run URL
 wrangler secret put CLOUD_RUN_URL
 # Enter: https://your-service-xyz-ew.a.run.app
+
+# Optional but recommended: Service token for Worker → Cloud Run auth
+# Get these from Zero Trust Dashboard → Access → Service Auth → Service Tokens
+wrangler secret put CF_ACCESS_CLIENT_ID
+# Enter: your-client-id (UUID format)
+
+wrangler secret put CF_ACCESS_CLIENT_SECRET
+# Enter: your-client-secret (long random string)
 ```
 
 ### Step 5: Deploy
@@ -86,30 +112,41 @@ wrangler secret put CLOUD_RUN_URL
 wrangler deploy --config wrangler.local.toml
 ```
 
-### Step 6: Configure Cloudflare Access
+### Step 6: Create Service Token (Recommended)
 
-1. Go to Cloudflare Zero Trust Dashboard
-2. Access → Applications → Add Application
-3. Select "Self-hosted"
-4. Configure:
-   - **Application name**: AIOStreams
-   - **Session duration**: 24 hours (or longer)
-   - **Application domain**: `aiostreams.yourdomain.com`
-5. Add a policy:
-   - **Policy name**: Allow Home IP
-   - **Action**: Allow
-   - **Include**: IP Ranges → Your home IP (e.g., `203.0.113.50/32`)
-6. Save
+**Why service tokens?** Stremio and other non-browser apps can't do interactive Cloudflare Access login. Service tokens let the Worker authenticate without user interaction.
+
+1. Go to **Zero Trust Dashboard** → **Access** → **Service Auth** → **Service Tokens**
+2. Click **Create Service Token**
+3. Name it (e.g., `aiostreams-worker`)
+4. Set duration (1 year or non-expiring)
+5. **IMPORTANT**: Copy both values immediately - the secret is only shown once:
+   - `CF-Access-Client-Id`: (UUID format)
+   - `CF-Access-Client-Secret`: (long random string)
+6. Set these as Worker secrets (Step 4 above)
 
 ### Step 7: Configure AIOStreams Environment
 
 In your Cloud Run deployment, set these environment variables:
 
 ```bash
+# Enable CF Access protection
+CF_ACCESS_ENABLED=true
+
+# For service token auth (recommended for Stremio):
+CF_ACCESS_SERVICE_TOKEN_ID=your-client-id-from-step-6
+CF_ACCESS_SERVICE_TOKEN_SECRET=your-client-secret-from-step-6
+
+# Paths to skip auth (health checks must be accessible)
+CF_ACCESS_BYPASS_PATHS=/api/v1/health,/api/v1/status
+```
+
+**Alternative: JWT-based auth** (for browser clients with Cloudflare Access):
+```bash
 CF_ACCESS_ENABLED=true
 CF_ACCESS_TEAM_DOMAIN=your-team-name
 CF_ACCESS_AUD=your-application-aud-tag
-CF_ACCESS_BYPASS_PATHS=/api/v1/health
+CF_ACCESS_BYPASS_PATHS=/api/v1/health,/api/v1/status
 ```
 
 Find your AUD tag in:
@@ -117,12 +154,23 @@ Zero Trust Dashboard → Access → Applications → Your App → Overview → A
 
 ## How It Works
 
+### Service Token Flow (Recommended)
+
 1. **Request arrives** at `aiostreams.yourdomain.com`
-2. **Cloudflare Access** checks if IP matches your policy (your home IP)
-   - If no match → blocked, never reaches Worker
+2. **Cloudflare Worker** receives request, injects `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers
+3. **Worker** forwards to Cloud Run (URL hidden from DNS)
+4. **AIOStreams app** verifies the service token headers match the configured values
+   - Valid token → serves request
+   - Invalid/missing → 403 Forbidden
+
+### Cloudflare Access Flow (Browser clients)
+
+1. **Request arrives** at `aiostreams.yourdomain.com`
+2. **Cloudflare Access** checks if user is authenticated (IP policy, identity, etc.)
+   - If no match → redirects to login or blocks
    - If match → adds `CF-Access-JWT-Assertion` header, forwards to Worker
-3. **Worker** receives request, forwards to Cloud Run (URL hidden from DNS)
-4. **AIOStreams app** verifies the `CF-Access-JWT-Assertion` JWT
+3. **Worker** forwards to Cloud Run
+4. **AIOStreams app** verifies the JWT
    - Valid token → serves request
    - Invalid/missing → 403 Forbidden
 
@@ -130,9 +178,9 @@ Zero Trust Dashboard → Access → Applications → Your App → Overview → A
 
 | Layer | Blocks |
 |-------|--------|
-| Cloudflare Access | Non-whitelisted IPs |
+| Service Token Auth | Requests without valid Worker credentials |
 | Hidden Cloud Run URL | Casual attackers who dig DNS |
-| JWT Verification | Direct Cloud Run access attempts |
+| Cloudflare Access (optional) | Non-whitelisted IPs/users |
 
 ## Free Tier Limits
 

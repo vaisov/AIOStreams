@@ -5,11 +5,18 @@
  * hiding the actual run.app URL from DNS lookups.
  *
  * Architecture:
- *   User → aiostreams.yourdomain.com → Cloudflare Access (IP check) → This Worker → Cloud Run
+ *   User → aiostreams.yourdomain.com → Cloudflare Access → This Worker → Cloud Run
+ *
+ * Authentication modes:
+ *   1. CF Access with Service Token: Worker injects CF_ACCESS_CLIENT_ID/SECRET headers
+ *   2. CF Access with IP policy: Cloudflare adds CF-Access-JWT-Assertion header
  *
  * Setup:
  * 1. Create a new Worker in Cloudflare Dashboard
- * 2. Set the CLOUD_RUN_URL secret (Settings > Variables > Add Secret)
+ * 2. Set secrets:
+ *    - CLOUD_RUN_URL: Your Cloud Run URL (required)
+ *    - CF_ACCESS_CLIENT_ID: Service token client ID (optional, for service token auth)
+ *    - CF_ACCESS_CLIENT_SECRET: Service token secret (optional, for service token auth)
  * 3. Deploy this code
  * 4. Add a route: aiostreams.yourdomain.com/* → this worker
  * 5. Configure Cloudflare Access policy for the domain
@@ -26,6 +33,10 @@ export default {
         headers: { 'Content-Type': 'text/plain' }
       });
     }
+
+    // Optional: Service token for authenticating Worker → Cloud Run
+    const cfAccessClientId = env.CF_ACCESS_CLIENT_ID;
+    const cfAccessClientSecret = env.CF_ACCESS_CLIENT_SECRET;
 
     try {
       // Parse the original request URL
@@ -45,6 +56,13 @@ export default {
       const clientIp = request.headers.get('CF-Connecting-IP');
       if (clientIp) {
         headers.set('X-Real-IP', clientIp);
+      }
+
+      // If service token is configured, inject it for Worker → Cloud Run auth
+      // This allows the app to verify the request came through the Worker
+      if (cfAccessClientId && cfAccessClientSecret) {
+        headers.set('CF-Access-Client-Id', cfAccessClientId);
+        headers.set('CF-Access-Client-Secret', cfAccessClientSecret);
       }
 
       // Create the proxied request

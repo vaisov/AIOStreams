@@ -100,13 +100,32 @@ function shouldBypassAuth(path: string): boolean {
 }
 
 /**
+ * Validates service token headers (CF-Access-Client-Id and CF-Access-Client-Secret)
+ * This is used when the Worker injects service token credentials
+ */
+function validateServiceToken(
+  clientId: string | undefined,
+  clientSecret: string | undefined
+): boolean {
+  const expectedClientId = Env.CF_ACCESS_SERVICE_TOKEN_ID;
+  const expectedClientSecret = Env.CF_ACCESS_SERVICE_TOKEN_SECRET;
+
+  if (!expectedClientId || !expectedClientSecret) {
+    return false;
+  }
+
+  return clientId === expectedClientId && clientSecret === expectedClientSecret;
+}
+
+/**
  * Express middleware for Cloudflare Access authentication
  *
- * When CF_ACCESS_ENABLED is true, this middleware validates the
- * CF-Access-JWT-Assertion header on all requests (except bypass paths).
+ * When CF_ACCESS_ENABLED is true, this middleware validates requests using one of:
+ * 1. CF-Access-JWT-Assertion header (from Cloudflare Access user auth)
+ * 2. CF-Access-Client-Id + CF-Access-Client-Secret headers (service token auth)
  *
- * Cloudflare Access sends this header when a user has been authenticated
- * through a Cloudflare Access policy.
+ * Service token auth is useful when clients (like Stremio) can't do browser login.
+ * The Cloudflare Worker can inject service token headers to authenticate.
  */
 export const cfAccessMiddleware = async (
   req: Request,
@@ -124,11 +143,38 @@ export const cfAccessMiddleware = async (
     return next();
   }
 
-  // Get the JWT from the CF-Access-JWT-Assertion header
+  // Check for service token authentication first
+  const cfAccessClientId = req.get('CF-Access-Client-Id');
+  const cfAccessClientSecret = req.get('CF-Access-Client-Secret');
+
+  if (cfAccessClientId && cfAccessClientSecret) {
+    if (validateServiceToken(cfAccessClientId, cfAccessClientSecret)) {
+      logger.debug('CF Access service token authentication successful', {
+        path: req.path,
+      });
+      (req as any).cfAccessIdentity = {
+        type: 'service_token',
+        clientId: cfAccessClientId,
+      };
+      return next();
+    } else {
+      logger.warn('CF Access service token validation failed', {
+        path: req.path,
+        ip: req.requestIp || req.userIp,
+      });
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied',
+        detail: 'Invalid service token credentials.',
+      });
+    }
+  }
+
+  // Fall back to JWT authentication
   const cfAccessJwt = req.get('CF-Access-JWT-Assertion');
 
   if (!cfAccessJwt) {
-    logger.warn('Missing CF-Access-JWT-Assertion header', {
+    logger.warn('Missing authentication headers', {
       path: req.path,
       ip: req.requestIp || req.userIp,
     });
@@ -147,6 +193,7 @@ export const cfAccessMiddleware = async (
 
     // Attach CF Access identity info to request for potential use downstream
     (req as any).cfAccessIdentity = {
+      type: 'jwt',
       email: verifyResult.payload.email,
       sub: verifyResult.payload.sub,
       iat: verifyResult.payload.iat,
@@ -154,7 +201,7 @@ export const cfAccessMiddleware = async (
     };
 
     if (Env.LOG_SENSITIVE_INFO) {
-      logger.debug('CF Access authentication successful', {
+      logger.debug('CF Access JWT authentication successful', {
         email: verifyResult.payload.email,
         path: req.path,
       });
