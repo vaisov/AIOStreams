@@ -229,7 +229,17 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
         })
       );
     }
-    if (nzbServices.length === 0 && nzbResults.length > 0) {
+    if (
+      nzbServices.length === 0 &&
+      nzbResults.length > 0 &&
+      !(
+        // allow no true nzb service if all have easynewsUrl and easynews is present as service.
+        (
+          nzbResults.every((nzb) => (nzb.easynewsUrl ? true : false)) &&
+          this.userData.services.some((s) => s.id === 'easynews')
+        )
+      )
+    ) {
       errorStreams.push(
         this._createErrorStream({
           title: `${this.name}`,
@@ -248,7 +258,9 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
       ),
       processNZBs(
         nzbResults,
-        nzbServices,
+        nzbServices.concat(
+          this.userData.services.filter((s) => s.id === 'easynews')
+        ),
         id,
         searchMetadata,
         this.clientIp,
@@ -435,7 +447,7 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
           }))
       );
 
-      if (proxiedStreams) {
+      if (proxiedStreams && !('error' in proxiedStreams)) {
         for (let i = 0; i < nzbdavProxyIndices.length; i++) {
           const index = nzbdavProxyIndices[i];
           const proxiedUrl = proxiedStreams[i];
@@ -486,7 +498,7 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
           }))
       );
 
-      if (proxiedStreams) {
+      if (proxiedStreams && !('error' in proxiedStreams)) {
         for (let i = 0; i < altmountProxyIndices.length; i++) {
           const index = altmountProxyIndices[i];
           const proxiedUrl = proxiedStreams[i];
@@ -560,11 +572,11 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
         queries.push(query.replace(titlePlaceholder, title));
       });
     };
-    if (parsedId.mediaType === 'movie' || !addSeasonEpisode) {
+    if (parsedId.mediaType === 'movie' && addYear) {
       addQuery(
-        `${titlePlaceholder}${metadata.year && addYear ? ` ${metadata.year}` : ''}`
+        `${titlePlaceholder}${metadata.year ? ` ${metadata.year}` : ''}`
       );
-    } else {
+    } else if (parsedId.mediaType === 'series' && addSeasonEpisode) {
       if (
         parsedId.season &&
         (parsedId.episode ? Number(parsedId.episode) < 100 : true)
@@ -587,6 +599,8 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
           `${titlePlaceholder} S${parsedId.season!.toString().padStart(2, '0')}E${parsedId.episode!.toString().padStart(2, '0')}`
         );
       }
+    } else {
+      addQuery(titlePlaceholder);
     }
     return queries;
   }
@@ -732,6 +746,10 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
             nzb: torrentOrNzb.nzb,
             hash: torrentOrNzb.hash,
             index: torrentOrNzb.file.index,
+            easynewsUrl:
+              torrentOrNzb.service?.id === 'easynews'
+                ? torrentOrNzb.easynewsUrl
+                : undefined,
             cacheAndPlay:
               this.userData.cacheAndPlay?.enabled &&
               this.userData.cacheAndPlay?.streamTypes?.includes('usenet'),
@@ -779,6 +797,7 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
           ? 'stremio-usenet'
           : torrentOrNzb.type,
       age: torrentOrNzb.age,
+      duration: torrentOrNzb.duration,
       infoHash: torrentOrNzb.hash,
       fileIdx: torrentOrNzb.file.index,
       behaviorHints: {
