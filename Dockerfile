@@ -8,6 +8,14 @@ FROM base AS builder
 
 WORKDIR /build
 
+# Build args for metadata
+ARG VERSION="unknown"
+ARG COMMIT_HASH="unknown"
+ARG COMMIT_TIME=""
+ARG BUILD_TIME=""
+ARG TAG="unknown"
+ARG DESCRIPTION=""
+
 # Copy LICENSE file.
 COPY LICENSE ./
 
@@ -31,6 +39,11 @@ COPY packages/frontend ./packages/frontend
 COPY scripts ./scripts
 COPY resources ./resources
 
+# Generate metadata.json from build args (defaults provided if not passed)
+RUN printf '{"version":"%s","description":"%s","tag":"%s","commitHash":"%s","buildTime":"%s","commitTime":"%s"}\n' \
+    "${VERSION}" "${DESCRIPTION}" "${TAG}" "${COMMIT_HASH}" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > resources/metadata.json && cat resources/metadata.json
 
 # Build the project.
 RUN pnpm run build
