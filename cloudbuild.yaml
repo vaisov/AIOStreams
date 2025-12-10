@@ -1,0 +1,42 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg'
+      - 'VERSION=2.18.2'
+      - '--build-arg'
+      - 'DESCRIPTION=AIOStreams consolidates multiple Stremio addons and debrid services into a single addon.'
+      - '--build-arg'
+      - 'TAG=${TAG_NAME}'
+      - '--build-arg'
+      - 'COMMIT_HASH=${SHORT_SHA}'
+      - '-t'
+      - '${_IMAGE_NAME}:${SHORT_SHA}'
+      - '-t'
+      - '${_IMAGE_NAME}:latest'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_IMAGE_NAME}:${SHORT_SHA}']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_IMAGE_NAME}:latest']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image'
+      - '${_IMAGE_NAME}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+
+substitutions:
+  _IMAGE_NAME: 'gcr.io/${PROJECT_ID}/aiostreams'
+  _SERVICE_NAME: 'aiostreams'
+  _REGION: 'europe-west1'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
