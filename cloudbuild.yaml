@@ -36,7 +36,7 @@ steps:
 substitutions:
   _IMAGE_NAME: 'gcr.io/${PROJECT_ID}/aiostreams'
   _SERVICE_NAME: 'aiostreams'
-  _REGION: 'europe-west1'
+  _REGION: 'europe-southwest1'
 
 options:
   logging: CLOUD_LOGGING_ONLY
