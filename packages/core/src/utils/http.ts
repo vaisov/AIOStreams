@@ -53,6 +53,7 @@ export interface RequestOptions {
   ignoreRecursion?: boolean;
   headers?: HeadersInit;
   body?: BodyInit;
+  forceProxy?: string;
   rawOptions?: RequestInit;
 }
 
@@ -86,10 +87,6 @@ export async function makeRequest(url: string, options: RequestOptions) {
     }
   }
 
-  if (headers.get('User-Agent') === 'none') {
-    headers.delete('User-Agent');
-  }
-
   if (urlObj.toString().startsWith(Env.INTERNAL_URL)) {
     headers.set(INTERNAL_SECRET_HEADER, Env.INTERNAL_SECRET);
   }
@@ -97,6 +94,14 @@ export async function makeRequest(url: string, options: RequestOptions) {
   let domainUserAgent = domainHasUserAgent(urlObj);
   if (domainUserAgent) {
     headers.set('User-Agent', domainUserAgent);
+  }
+
+  if (
+    ['none', 'false', '', 'undefined'].includes(
+      (headers.get('User-Agent') ?? '').toLowerCase().trim()
+    )
+  ) {
+    headers.delete('User-Agent');
   }
 
   // block recursive requests
@@ -118,21 +123,47 @@ export async function makeRequest(url: string, options: RequestOptions) {
   } else {
     await urlCount.set(key, 1, Env.RECURSION_THRESHOLD_WINDOW);
   }
+
+  let dispatcher: Dispatcher | undefined;
+
+  if (options.forceProxy) {
+    dispatcher = getProxyAgent(options.forceProxy);
+  } else if (useProxy) {
+    dispatcher = getProxyAgent(Env.ADDON_PROXY![proxyIndex]);
+  }
+
   logger.debug(
-    `Making a ${useProxy ? 'proxied' : 'direct'}${proxyIndex !== -1 ? ` (proxy ${proxyIndex + 1})` : ''} request to ${makeUrlLogSafe(
+    `Making a ${useProxy ? 'proxied' : options.forceProxy ? 'forced proxied (' + options.forceProxy + ')' : 'direct'}${proxyIndex !== -1 ? ` (proxy ${proxyIndex + 1})` : ''} request to ${makeUrlLogSafe(
       urlObj.toString()
     )} with forwarded ip ${maskSensitiveInfo(options.forwardIp ?? 'none')} and headers ${maskSensitiveInfo(JSON.stringify(Object.fromEntries(headers)))}`
   );
-  let response = fetch(urlObj.toString(), {
-    ...options.rawOptions,
-    method: options.method,
-    body: options.body,
-    headers: headers,
-    dispatcher: useProxy
-      ? getProxyAgent(Env.ADDON_PROXY![proxyIndex])
-      : undefined,
-    signal: AbortSignal.timeout(options.timeout),
-  });
+
+  let response;
+  try {
+    response = await fetch(urlObj.toString(), {
+      ...options.rawOptions,
+      method: options.method,
+      body: options.body,
+      headers: headers,
+      dispatcher: dispatcher,
+      signal: AbortSignal.timeout(options.timeout),
+    });
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      err.name === 'TypeError' &&
+      err.message === 'fetch failed' &&
+      err.cause
+    ) {
+      let logParams: [string, Record<string, any>] = [
+        'Fetch failed due to network error',
+        err.cause,
+      ];
+      delete logParams[1].stack;
+      logger.error(...logParams);
+    }
+    throw err;
+  }
 
   return response;
 }
@@ -147,7 +178,10 @@ export function getProxyAgent(proxyUrl: string): Dispatcher | undefined {
 
   if (!proxyAgent) {
     const proxyUrlObj = new URL(proxyUrl);
-    if (proxyUrlObj.protocol === 'socks5:') {
+    if (
+      proxyUrlObj.protocol === 'socks5:' ||
+      proxyUrlObj.protocol === 'socks5h:'
+    ) {
       proxyAgent = socksDispatcher({
         type: 5,
         port: parseInt(proxyUrlObj.port),
@@ -228,7 +262,7 @@ export function shouldProxy(url: URL): {
   return { useProxy, proxyIndex };
 }
 
-function domainHasUserAgent(url: URL) {
+export function domainHasUserAgent(url: URL) {
   let userAgent: string | undefined;
   let hostname = url.hostname;
 
@@ -236,12 +270,8 @@ function domainHasUserAgent(url: URL) {
     return undefined;
   }
 
-  for (const rule of Env.HOSTNAME_USER_AGENT_OVERRIDES.split(',')) {
-    const [ruleHostname, ruleUserAgent] = rule.split(':');
-    if (!ruleUserAgent) {
-      logger.error(`Invalid user agent config: ${rule}`);
-      continue;
-    }
+  const mappings = Array.from(Env.HOSTNAME_USER_AGENT_OVERRIDES.entries());
+  for (const [ruleHostname, ruleUserAgent] of mappings) {
     if (ruleHostname === '*') {
       userAgent = ruleUserAgent;
     } else if (ruleHostname.startsWith('*')) {

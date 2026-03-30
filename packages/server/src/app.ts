@@ -5,13 +5,14 @@ import {
   statusApi,
   formatApi,
   catalogApi,
-  rpdbApi,
+  postersApi,
   gdriveApi,
   debridApi,
   searchApi,
   animeApi,
   proxyApi,
   templatesApi,
+  syncApi,
 } from './routes/api/index.js';
 import {
   configure,
@@ -24,14 +25,21 @@ import {
   alias,
 } from './routes/stremio/index.js';
 import {
+  manifest as chillLinkManifest,
+  streams as chillLinkStreams,
+} from './routes/chilllink/index.js';
+import {
   gdrive,
   torboxSearch,
   torznab,
   newznab,
   prowlarr,
   knaben,
+  eztv,
   torrentGalaxy,
+  seadex,
   easynews,
+  library,
 } from './routes/builtins/index.js';
 import {
   ipMiddleware,
@@ -61,10 +69,12 @@ export enum StaticFiles {
   STORE_LIMIT_EXCEEDED = 'store_limit_exceeded.mp4',
   CONTENT_PROXY_LIMIT_REACHED = 'content_proxy_limit_reached.mp4',
   INTERNAL_SERVER_ERROR = '500.mp4',
+  TOO_MANY_REQUESTS = '429.mp4',
   FORBIDDEN = '403.mp4',
   UNAUTHORIZED = '401.mp4',
   NO_MATCHING_FILE = 'no_matching_file.mp4',
   PAYMENT_REQUIRED = 'payment_required.mp4',
+  OK = '200.mp4',
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -92,7 +102,7 @@ apiRouter.use('/health', healthApi);
 apiRouter.use('/status', statusApi);
 apiRouter.use('/format', formatApi);
 apiRouter.use('/catalogs', catalogApi);
-apiRouter.use('/rpdb', rpdbApi);
+apiRouter.use('/posters', postersApi);
 apiRouter.use('/oauth/exchange/gdrive', gdriveApi);
 apiRouter.use('/debrid', debridApi);
 if (Env.ENABLE_SEARCH_API) {
@@ -101,6 +111,7 @@ if (Env.ENABLE_SEARCH_API) {
 apiRouter.use('/anime', animeApi);
 apiRouter.use('/proxy', proxyApi);
 apiRouter.use('/templates', templatesApi);
+apiRouter.use('/sync', syncApi);
 app.use(`/api/v${constants.API_VERSION}`, apiRouter);
 
 // Stremio Routes
@@ -134,6 +145,14 @@ stremioAuthRouter.use('/addon_catalog', addonCatalog);
 app.use('/stremio', stremioRouter); // For public routes
 app.use('/stremio/:uuid/:encryptedPassword', stremioAuthRouter); // For authenticated routes
 
+const chillLinkRouter = express.Router({ mergeParams: true });
+chillLinkRouter.use(corsMiddleware);
+chillLinkRouter.use(userDataMiddleware);
+chillLinkRouter.use('/manifest', chillLinkManifest);
+chillLinkRouter.use('/streams', chillLinkStreams);
+
+app.use('/chilllink/:uuid/:encryptedPassword', chillLinkRouter);
+
 const builtinsRouter = express.Router();
 builtinsRouter.use(internalMiddleware);
 builtinsRouter.use('/gdrive', gdrive);
@@ -142,8 +161,11 @@ builtinsRouter.use('/torznab', torznab);
 builtinsRouter.use('/newznab', newznab);
 builtinsRouter.use('/prowlarr', prowlarr);
 builtinsRouter.use('/knaben', knaben);
+builtinsRouter.use('/eztv', eztv);
 builtinsRouter.use('/torrent-galaxy', torrentGalaxy);
+builtinsRouter.use('/seadex', seadex);
 builtinsRouter.use('/easynews', easynews);
+builtinsRouter.use('/library', library);
 app.use('/builtins', builtinsRouter);
 
 app.get('/logo.png', staticRateLimiter, (req, res, next) => {

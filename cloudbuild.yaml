@@ -3,7 +3,7 @@ steps:
     args:
       - 'build'
       - '--build-arg'
-      - 'VERSION=2.18.2'
+      - 'VERSION=2.26.0'
       - '--build-arg'
       - 'DESCRIPTION=AIOStreams consolidates multiple Stremio addons and debrid services into a single addon.'
       - '--build-arg'

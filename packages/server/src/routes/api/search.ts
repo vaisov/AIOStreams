@@ -19,6 +19,7 @@ import {
 } from '@aiostreams/core';
 import { streamApiRateLimiter } from '../../middlewares/ratelimit.js';
 import { ApiResponse, createResponse } from '../../utils/responses.js';
+import { syncUserDataUrls } from '../../utils/syncUserData.js';
 import { z, ZodError } from 'zod';
 const router: Router = Router();
 
@@ -79,6 +80,7 @@ router.get(
           );
           if (userData) {
             userData.trusted = false;
+            userData.uuid = undefined;
             logger.debug(`Using encodedUserData for Search API request`);
           }
         } catch (error: any) {
@@ -161,6 +163,7 @@ router.get(
         throw new APIError(constants.ErrorCode.USER_INVALID_DETAILS);
       }
       userData.ip = req.userIp;
+      userData = await syncUserDataUrls(userData);
       try {
         userData = await validateConfig(userData, {
           skipErrorsFromAddonsOrProxies: true,
@@ -177,11 +180,21 @@ router.get(
       const stremioTransformer = format
         ? new StremioTransformer(userData)
         : null;
-      const response = await (
-        await new AIOStreams(userData).initialise()
-      ).getStreams(id, type);
 
-      const stremioData = await stremioTransformer?.transformStreams(response);
+      const aiostreams = new AIOStreams(userData);
+      await aiostreams.initialise();
+      const response = await aiostreams.getStreams(id, type);
+      const ctx = aiostreams.getStreamContext();
+
+      if (!ctx) {
+        throw new Error('Stream context not available');
+      }
+      const formatterContext = ctx.toFormatterContext(response.data.streams);
+
+      const stremioData = await stremioTransformer?.transformStreams(
+        response,
+        formatterContext
+      );
       const stremioStreams = stremioData?.streams.filter(
         (stream) =>
           !['statistic', 'error'].includes(stream.streamData?.type || '')

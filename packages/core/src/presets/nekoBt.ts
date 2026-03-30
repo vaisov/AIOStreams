@@ -158,14 +158,28 @@ export class NekoBtStreamParser extends BuiltinStreamParser {
           parsedFile.quality = aioQuality;
         }
       }
-      // languages
-      (fileMetadata.audioLanguages || [])
+      // audio languages
+      [...(fileMetadata.audioLanguages ?? [])]
         .map(mapLanguageCode)
         .map(convertLangCodeToName)
         .forEach((lang: string | undefined) => {
           if (lang && !parsedFile.languages?.includes(lang)) {
             parsedFile.languages = parsedFile.languages || [];
             parsedFile.languages.push(lang);
+          }
+        });
+
+      // subtitle languages (includes fansubs)
+      [
+        ...(fileMetadata.fansubLanguages ?? []),
+        ...(fileMetadata.subtitleLanguages ?? []),
+      ]
+        .map(mapLanguageCode)
+        .map(convertLangCodeToName)
+        .forEach((lang: string | undefined) => {
+          if (lang && !parsedFile.subtitles?.includes(lang)) {
+            parsedFile.subtitles = parsedFile.subtitles || [];
+            parsedFile.subtitles.push(lang);
           }
         });
     }
@@ -188,11 +202,11 @@ export class NekoBtPreset extends TorznabPreset {
       ).filter((option) => option.id !== 'url' && option.id !== 'resources'),
       {
         id: 'apiKey',
-        name: 'API Key',
+        name: 'API Key (Optional)',
         description:
           'nekoBT API Key. You can find this in your nekoBT account settings.',
         type: 'password',
-        required: true,
+        required: false,
       },
       {
         id: 'services',
