@@ -1,7 +1,7 @@
 import { Addon, Option, UserData, ParsedStream, Stream } from '../db/index.js';
 import { Preset, baseOptions } from './preset.js';
 import { StreamParser } from '../parser/index.js';
-import { Env, createLogger, makeRequest } from '../utils/index.js';
+import { appConfig, createLogger, makeRequest } from '../utils/index.js';
 import { constants } from '../utils/index.js';
 
 const logger = createLogger('streamnzb');
@@ -57,13 +57,12 @@ export class StreamNZBPreset extends Preset {
       ...baseOptions(
         'StreamNZB',
         supportedResources,
-        Env.DEFAULT_TIMEOUT
+        appConfig.presets.defaultTimeout
       ).filter((option) => option.id !== 'url'),
       {
         id: 'url',
         name: 'Manifest URL',
-        description:
-          'Manifest URL to your StreamNZB instance',
+        description: 'Manifest URL to your StreamNZB instance',
         type: 'url',
         required: true,
       },
@@ -85,12 +84,11 @@ export class StreamNZBPreset extends Preset {
       ID: 'streamnzb',
       NAME: 'StreamNZB',
       LOGO: 'https://cdn.discordapp.com/icons/1470288400157380710/6f397b4a2e9561dc7ad43526588cfd67.png',
-      URL: '',
-      TIMEOUT: Env.DEFAULT_TIMEOUT,
+      URL: [],
+      TIMEOUT: appConfig.presets.defaultTimeout,
       USER_AGENT: 'AIOStreams',
       SUPPORTED_SERVICES: [],
-      DESCRIPTION:
-        'Stream via nntp without any additional services.',
+      DESCRIPTION: 'Stream via nntp without any additional services.',
       OPTIONS: options,
       SUPPORTED_STREAM_TYPES: [constants.USENET_STREAM_TYPE],
       SUPPORTED_RESOURCES: supportedResources,
@@ -137,7 +135,10 @@ export class StreamNZBPreset extends Preset {
     const body = {
       streams: streams.map((s) => ({
         name: s.filename ?? s.originalName,
-        failoverId: (typeof s.extra?.failoverId === 'string' ? s.extra.failoverId : undefined) ?? s.id,
+        failoverId:
+          (typeof s.extra?.failoverId === 'string'
+            ? s.extra.failoverId
+            : undefined) ?? s.id,
       })),
     };
     logger.debug(

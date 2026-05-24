@@ -1,6 +1,57 @@
 import { z } from 'zod';
 import * as constants from '../utils/constants.js';
-import { Env } from '../utils/env.js';
+import { config } from '../config/index.js';
+
+/**
+ * Stream Expression Language string with a runtime-configurable maximum length
+ * pulled from `config.userLimits.sel.maxExpressionLength`. The minimum of 1
+ * is enforced here too.
+ */
+function streamExpression() {
+  return z
+    .string()
+    .min(1)
+    .superRefine((value, ctx) => {
+      const max = config.userLimits.sel.maxExpressionLength;
+      if (value.length > max) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `Stream expression exceeds maximum length of ${max} characters.`,
+        });
+      }
+    });
+}
+
+/**
+ * Variant of `streamExpression()` without the minimum-length requirement.
+ */
+function streamExpressionOptional() {
+  return z.string().superRefine((value, ctx) => {
+    const max = config.userLimits.sel.maxExpressionLength;
+    if (value.length > max) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `Stream expression exceeds maximum length of ${max} characters.`,
+      });
+    }
+  });
+}
+
+/**
+ * Formatter template string with a runtime-configurable maximum length pulled
+ * from `config.userLimits.maxFormatterTemplateLength`.
+ */
+function formatterTemplate() {
+  return z.string().superRefine((value, ctx) => {
+    const max = config.userLimits.maxFormatterTemplateLength;
+    if (value.length > max) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `Formatter template exceeds maximum length of ${max} characters.`,
+      });
+    }
+  });
+}
 
 const ServiceIds = z.enum(constants.SERVICES);
 
@@ -29,10 +80,6 @@ const PassthroughSchema = z.union([
 export type PassthroughValue = z.infer<typeof PassthroughSchema>;
 export type PassthroughStage = z.infer<typeof PassthroughStages>;
 
-// const SortCriteria = z.enum(constants.SORT_CRITERIA);
-
-// const SortDirections = z.enum(constants.SORT_DIRECTIONS);
-
 const SortCriterion = z.object({
   key: z.enum(constants.SORT_CRITERIA),
   direction: z.enum(constants.SORT_DIRECTIONS),
@@ -43,12 +90,18 @@ export type SortCriterion = z.infer<typeof SortCriterion>;
 const StreamTypes = z.enum(constants.STREAM_TYPES);
 const Languages = z.enum(constants.LANGUAGES);
 
+const FormatterTemplateShape = z.object({
+  name: formatterTemplate(),
+  description: formatterTemplate(),
+});
+
 const Formatter = z.object({
   id: z.enum(constants.FORMATTERS),
-  definition: z
+  definitions: z
     .object({
-      name: z.string().max(Env.MAX_FORMATTER_TEMPLATE_LENGTH),
-      description: z.string().max(Env.MAX_FORMATTER_TEMPLATE_LENGTH),
+      custom: FormatterTemplateShape.optional(),
+      overrides: z.record(z.string(), FormatterTemplateShape).optional(),
+      saved: z.record(z.string(), FormatterTemplateShape).optional(),
     })
     .optional(),
 });
@@ -149,7 +202,7 @@ const AddonSchema = z.object({
   pinPosition: z.enum(['top', 'bottom']).optional(),
   serviceWrapped: z.boolean().optional(),
   headers: z.record(z.string().min(1), z.string().min(1)).optional(),
-  ip: z.union([z.ipv4(), z.ipv6()]).optional(),
+  ip: z.string().optional(),
 });
 
 // preset objects are transformed into addons by a preset transformer.
@@ -359,13 +412,40 @@ export const CacheAndPlaySchema = z
 
 export type CacheAndPlay = z.infer<typeof CacheAndPlaySchema>;
 
+const MergeStrategy = z.enum(['inherit', 'extend', 'override']);
+const BinaryMergeStrategy = z.enum(['inherit', 'override']);
+
+export const ParentConfigSchema = z.object({
+  uuid: z.string().uuid(),
+  password: z.string().min(1),
+  mergeStrategies: z
+    .object({
+      presets: MergeStrategy.default('inherit'),
+      services: MergeStrategy.default('inherit'),
+      filters: BinaryMergeStrategy.default('inherit'),
+      sorting: BinaryMergeStrategy.default('inherit'),
+      formatter: BinaryMergeStrategy.default('inherit'),
+      proxy: BinaryMergeStrategy.default('inherit'),
+      metadata: BinaryMergeStrategy.default('inherit'),
+      misc: BinaryMergeStrategy.default('inherit'),
+      branding: BinaryMergeStrategy.default('inherit'),
+      fieldOverrides: z
+        .record(z.string(), z.enum(['inherit', 'override', 'extend']))
+        .optional(),
+    })
+    .optional(),
+});
+
+export type ParentConfig = z.infer<typeof ParentConfigSchema>;
+
 export const UserDataSchema = z.object({
   uuid: z.string().uuid().optional(),
+  parentConfig: ParentConfigSchema.optional(),
   encryptedPassword: z.string().min(1).optional(),
   trusted: z.boolean().optional(),
   showChanges: z.boolean().optional(),
-  addonPassword: z.string().optional(),
-  ip: z.union([z.ipv4(), z.ipv6()]).optional(),
+  accessKey: z.string().optional(),
+  ip: z.string().optional(),
   addonName: z.string().min(1).max(300).optional(),
   addonLogo: z.string().url().optional(),
   addonBackground: z.string().url().optional(),
@@ -393,6 +473,10 @@ export const UserDataSchema = z.object({
   includedLanguages: z.array(Languages).optional(),
   requiredLanguages: z.array(Languages).optional(),
   preferredLanguages: z.array(Languages).optional(),
+  excludedSubtitles: z.array(Languages).optional(),
+  includedSubtitles: z.array(Languages).optional(),
+  requiredSubtitles: z.array(Languages).optional(),
+  preferredSubtitles: z.array(Languages).optional(),
   excludedVisualTags: z.array(VisualTags).optional(),
   includedVisualTags: z.array(VisualTags).optional(),
   requiredVisualTags: z.array(VisualTags).optional(),
@@ -435,9 +519,6 @@ export const UserDataSchema = z.object({
   includedKeywords: z.array(z.string().min(1)).optional(),
   excludedKeywords: z.array(z.string().min(1)).optional(),
   preferredKeywords: z.array(z.string().min(1)).optional(),
-  randomiseResults: z.boolean().optional(),
-  enhanceResults: z.boolean().optional(),
-  enhancePosters: z.boolean().optional(),
   excludeSeederRange: z
     .tuple([z.number().min(0), z.number().min(0)])
     .optional(),
@@ -458,6 +539,7 @@ export const UserDataSchema = z.object({
       tolerance: z.number().min(0).max(365).optional(),
       requestTypes: z.array(z.string()).optional(),
       addons: z.array(z.string()).optional(),
+      showInfoOnFilter: z.boolean().optional(),
     })
     .optional(),
   enableSeadex: z.boolean().optional(),
@@ -475,7 +557,7 @@ export const UserDataSchema = z.object({
   excludedStreamExpressions: z
     .array(
       z.object({
-        expression: z.string().min(1).max(Env.MAX_SEL_LENGTH),
+        expression: streamExpression(),
         enabled: z.boolean().default(true),
       })
     )
@@ -483,7 +565,7 @@ export const UserDataSchema = z.object({
   requiredStreamExpressions: z
     .array(
       z.object({
-        expression: z.string().min(1).max(Env.MAX_SEL_LENGTH),
+        expression: streamExpression(),
         enabled: z.boolean().default(true),
       })
     )
@@ -491,7 +573,7 @@ export const UserDataSchema = z.object({
   preferredStreamExpressions: z
     .array(
       z.object({
-        expression: z.string().min(1).max(Env.MAX_SEL_LENGTH),
+        expression: streamExpression(),
         enabled: z.boolean().default(true),
       })
     )
@@ -499,7 +581,7 @@ export const UserDataSchema = z.object({
   includedStreamExpressions: z
     .array(
       z.object({
-        expression: z.string().min(1).max(Env.MAX_SEL_LENGTH),
+        expression: streamExpression(),
         enabled: z.boolean().default(true),
       })
     )
@@ -507,7 +589,7 @@ export const UserDataSchema = z.object({
   rankedStreamExpressions: z
     .array(
       z.object({
-        expression: z.string().min(1).max(Env.MAX_SEL_LENGTH),
+        expression: streamExpression(),
         score: z.number().min(-1_000_000).max(1_000_000),
         enabled: z.boolean().default(true),
       })
@@ -555,7 +637,7 @@ export const UserDataSchema = z.object({
   dynamicAddonFetching: z
     .object({
       enabled: z.boolean().optional(),
-      condition: z.string().max(Env.MAX_SEL_LENGTH).optional(),
+      condition: streamExpressionOptional().optional(),
     })
     .optional(),
   groups: z
@@ -565,7 +647,7 @@ export const UserDataSchema = z.object({
         .array(
           z.object({
             addons: z.array(z.string().min(1)),
-            condition: z.string().min(1).max(Env.MAX_SEL_LENGTH),
+            condition: streamExpression(),
           })
         )
         .optional(),
@@ -596,8 +678,13 @@ export const UserDataSchema = z.object({
   topPosterApiKey: z.string().optional(),
   aioratingsApiKey: z.string().optional(),
   aioratingsProfileId: z.string().optional(),
+  openposterdbApiKey: z.string().optional(),
+  openposterdbUrl: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().url().optional()
+  ),
   posterService: z
-    .enum(['rpdb', 'top-poster', 'aioratings', 'none'])
+    .enum(['rpdb', 'top-poster', 'aioratings', 'openposterdb', 'none'])
     .optional(),
   usePosterRedirectApi: z.boolean().optional(),
   usePosterServiceForMeta: z.boolean().optional(),
@@ -615,6 +702,7 @@ export const UserDataSchema = z.object({
       enabled: z.boolean().optional(),
       position: z.enum(['top', 'bottom']).optional(),
       statsToShow: z.array(z.enum(['addon', 'filter', 'timing'])).optional(),
+      showFilterStatsOnNoStreams: z.boolean().optional(),
     })
     .optional(),
   tmdbAccessToken: z.string().optional(),
@@ -668,14 +756,14 @@ export const UserDataSchema = z.object({
   /** @deprecated Use precacheSelector instead */
   alwaysPrecache: z.boolean().optional(),
   /** @deprecated Use precacheSelector instead */
-  precacheCondition: z.string().min(1).max(Env.MAX_SEL_LENGTH).optional(),
-  precacheSelector: z.string().min(1).max(Env.MAX_SEL_LENGTH).optional(),
+  precacheCondition: streamExpression().optional(),
+  precacheSelector: streamExpression().optional(),
   /** When false, all streams returned by precacheSelector are pinged; defaults to true (first stream only). */
   precacheSingleStream: z.boolean().optional(),
   preloadStreams: z
     .object({
       enabled: z.boolean().optional(),
-      selector: z.string().min(1).max(Env.MAX_SEL_LENGTH).optional(),
+      selector: streamExpression().optional(),
       /** When false, all streams returned by selector are pinged; defaults to true (first stream only). */
       singleStream: z.boolean().optional(),
     })
@@ -713,30 +801,9 @@ export const UserDataSchema = z.object({
 
 export type UserData = z.infer<typeof UserDataSchema>;
 
-export const TABLES = {
-  USERS: `
-      uuid TEXT PRIMARY KEY,
-      password_hash TEXT NOT NULL,
-      config TEXT NOT NULL,
-      config_salt TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP),
-      updated_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP),
-      accessed_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP)
-    `,
-  distributed_locks: `
-      key TEXT PRIMARY KEY,
-      owner TEXT NOT NULL,
-      expires_at BIGINT NOT NULL,
-      result TEXT
-    `,
-  cache: `
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      expires_at BIGINT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    `,
-};
+// Schema DDL has moved to packages/core/src/db/migrations/. Adding a
+// new table or column requires a migration file — runtime code no
+// longer creates tables.
 
 const strictManifestResourceSchema = z.object({
   name: z.enum(constants.RESOURCES),
@@ -912,6 +979,7 @@ export const ParsedFileSchema = z.object({
   container: z.string().optional(),
   extension: z.string().optional(),
   seasonPack: z.boolean().optional(),
+  hasChapters: z.boolean().optional(),
 });
 
 export const ParsedStreamSchema = z.object({
@@ -1234,7 +1302,7 @@ const PresetMinimalMetadataSchema = z.object({
 });
 
 const PresetMetadataSchema = PresetMinimalMetadataSchema.extend({
-  URL: z.string(),
+  URL: z.array(z.string()),
   TIMEOUT: z.number(),
   USER_AGENT: z.string(),
 });
@@ -1265,7 +1333,13 @@ const StatusResponseSchema = z.object({
       trustedUrls: z.array(z.string()).optional(),
     }),
     loggingSensitiveInfo: z.boolean(),
+    searchApiDisabled: z.boolean(),
+    seanimeExtensionVersion: z.string().nullable(),
     tmdbApiAvailable: z.boolean(),
+    /** Global analytics master switch (false = no events written anywhere). */
+    analyticsEnabled: z.boolean(),
+    /** Per-user analytics (configure-page Stats tab) enabled state. */
+    userAnalyticsEnabled: z.boolean(),
     forced: z.object({
       proxy: z.object({
         enabled: z.boolean().or(z.null()),
@@ -1321,6 +1395,13 @@ export const RPDBIsValidResponse = z.object({
   valid: z.boolean(),
 });
 export type RPDBIsValidResponse = z.infer<typeof RPDBIsValidResponse>;
+
+export const OpenPosterDBIsValidResponse = z.object({
+  valid: z.boolean(),
+});
+export type OpenPosterDBIsValidResponse = z.infer<
+  typeof OpenPosterDBIsValidResponse
+>;
 
 export const TopPosterIsValidResponse = z.object({
   valid: z.boolean(),

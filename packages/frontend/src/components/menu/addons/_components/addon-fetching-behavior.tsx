@@ -1,4 +1,3 @@
-'use client';
 import React, { useState } from 'react';
 import { useUserData } from '@/context/userData';
 import { SettingsCard } from '../../../shared/settings-card';
@@ -96,6 +95,7 @@ export function AddonFetchingBehaviorCard() {
   return (
     <SettingsCard
       title="Addon Fetching Strategy"
+      id="fetchStrategy"
       description="Choose how streams are fetched from your addons"
     >
       <Select

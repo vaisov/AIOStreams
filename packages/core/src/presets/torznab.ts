@@ -1,6 +1,6 @@
-import { Addon, Option, Stream, UserData } from '../db/index.js';
+﻿import { Addon, Option, Stream, UserData } from '../db/index.js';
 import { Preset, baseOptions } from './preset.js';
-import { Env, RESOURCES, ServiceId, constants } from '../utils/index.js';
+import { appConfig, RESOURCES, ServiceId, constants } from '../utils/index.js';
 import { StremThruPreset } from './stremthru.js';
 import { BuiltinAddonPreset } from './builtin.js';
 
@@ -45,10 +45,10 @@ export class TorznabPreset extends BuiltinAddonPreset {
         name: 'Timeout (ms)',
         description: 'The timeout for this addon',
         type: 'number',
-        default: Env.DEFAULT_TIMEOUT,
+        default: appConfig.presets.defaultTimeout,
         constraints: {
-          min: Env.MIN_TIMEOUT,
-          max: Env.MAX_TIMEOUT,
+          min: appConfig.userLimits.timeouts.minTimeout,
+          max: appConfig.userLimits.timeouts.maxTimeout,
           forceInUi: false,
         },
       },
@@ -118,7 +118,7 @@ export class TorznabPreset extends BuiltinAddonPreset {
         id: 'initialLimit',
         name: 'Initial Result Limit',
         description:
-          "Sets the maximum results to return. Leave blank to use the optimal default limit. Only use this if you need to restrict results.",
+          'Sets the maximum results to return. Leave blank to use the optimal default limit. Only use this if you need to restrict results.',
         type: 'number',
         required: false,
         showInSimpleMode: false,
@@ -153,9 +153,9 @@ export class TorznabPreset extends BuiltinAddonPreset {
       ID: 'torznab',
       NAME: 'Torznab',
       LOGO: '',
-      URL: `${Env.INTERNAL_URL}/builtins/torznab`,
-      TIMEOUT: Env.DEFAULT_TIMEOUT,
-      USER_AGENT: Env.DEFAULT_USER_AGENT,
+      URL: [`${appConfig.bootstrap.internalUrl}/builtins/torznab`],
+      TIMEOUT: appConfig.presets.defaultTimeout,
+      USER_AGENT: appConfig.http.defaultUserAgent,
       SUPPORTED_SERVICES: StremThruPreset.supportedServices,
       DESCRIPTION: 'An addon to get debrid results from a Torznab endpoint.',
       OPTIONS: options,
@@ -251,6 +251,6 @@ export class TorznabPreset extends BuiltinAddonPreset {
     };
 
     const configString = this.base64EncodeJSON(config, 'urlSafe');
-    return `${this.METADATA.URL}/${configString}/manifest.json`;
+    return `${this.DEFAULT_URL}/${configString}/manifest.json`;
   }
 }

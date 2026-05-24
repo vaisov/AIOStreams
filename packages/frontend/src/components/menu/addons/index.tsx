@@ -1,30 +1,22 @@
-'use client';
-import React, {
-  useState,
-  useMemo,
-  useEffect,
-  useRef,
-  useCallback,
-} from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { CatalogModification } from '@aiostreams/core';
 import { PageWrapper } from '../../shared/page-wrapper';
 import { useStatus } from '@/context/status';
-import { useUserData } from '@/context/userData';
+import { useUserData, useParentInheritance } from '@/context/userData';
+import { InheritedBadge } from '../../shared/inherited-badge';
 import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { TextInput } from '../../ui/text-input';
 import { SearchIcon } from 'lucide-react';
 import { StaticTabs } from '../../ui/tabs';
-import {
-  LuDownload,
-  LuGlobe,
-  LuSettings,
-} from 'react-icons/lu';
+import { LuDownload, LuGlobe, LuSettings } from 'react-icons/lu';
 import { AnimatePresence } from 'framer-motion';
 import { PageControls } from '../../shared/page-controls';
 import { Select } from '../../ui/select';
 import { MenuTabs } from '../../shared/menu-tabs';
 import { useMode } from '@/context/mode';
+import { useSubTab } from '@/context/sub-tab';
 import { IoExtensionPuzzle } from 'react-icons/io5';
 import { MdOutlineDataset, MdSubtitles } from 'react-icons/md';
 import { RiFolderDownloadFill } from 'react-icons/ri';
@@ -51,86 +43,91 @@ function Content() {
   const { status } = useStatus();
   const { mode } = useMode();
   const { userData, setUserData } = useUserData();
+  const { isInherited, hasParent } = useParentInheritance();
   const [page, setPage] = useState<'installed' | 'marketplace'>('installed');
-  const [installedTab, setInstalledTab] = useState<'addons' | 'catalogs'>(
-    'addons'
-  );
-  const [catalogLoading, setCatalogLoading] = useState(false);
-
-  const fetchCatalogsData = useCallback(
-    async (hideToast = false) => {
-      setCatalogLoading(true);
-      try {
-        const catalogs = await fetchCatalogs(userData);
-        setUserData((prev) => {
-          const existingMods = prev.catalogModifications || [];
-          const existingIds = new Set(
-            existingMods.map((mod) => `${mod.id}-${mod.type}`)
+  const { tab: installedTab, setTab: setInstalledTab } = useSubTab('addons');
+  const { mutate: fetchCatalogsData, isPending: catalogLoading } = useMutation({
+    mutationFn: (currentUserData: typeof userData) =>
+      fetchCatalogs(currentUserData),
+    onSuccess: (catalogs, currentUserData) => {
+      setUserData((prev) => {
+        const existingMods = prev.catalogModifications || [];
+        const existingIds = new Set(
+          existingMods.map((mod) => `${mod.id}-${mod.type}`)
+        );
+        const modifications = existingMods.map((eMod) => {
+          if (eMod.id.startsWith('aiostreams.merged.')) return eMod;
+          const nMod = catalogs.find(
+            (c) => c.id === eMod.id && c.type === eMod.type
           );
-          const modifications = existingMods.map((eMod) => {
-            if (eMod.id.startsWith('aiostreams.merged.')) return eMod;
-            const nMod = catalogs.find(
-              (c) => c.id === eMod.id && c.type === eMod.type
-            );
-            if (nMod) {
-              return {
-                ...eMod,
-                addonName: nMod.addonName,
-                type: nMod.type,
-                hideable: nMod.hideable,
-                searchable: nMod.searchable,
-              };
-            }
-            return eMod;
-          });
-          catalogs.forEach((catalog) => {
-            if (!existingIds.has(`${catalog.id}-${catalog.type}`)) {
-              modifications.push({
-                id: catalog.id,
-                name: catalog.name,
-                type: catalog.type,
-                enabled: true,
-                shuffle: false,
-                usePosterService: !!(
-                  userData.rpdbApiKey ||
-                  userData.topPosterApiKey ||
-                  userData.aioratingsApiKey
-                ),
-                hideable: catalog.hideable,
-                searchable: catalog.searchable,
-                addonName: catalog.addonName,
-              });
-            }
-          });
-          const newCatalogIds = new Set(
-            catalogs.map((c) => `${c.id}-${c.type}`)
-          );
-          const filteredMods = modifications.filter(
-            (mod) =>
-              mod.id.startsWith('aiostreams.merged.') ||
-              newCatalogIds.has(`${mod.id}-${mod.type}`)
-          );
-          return { ...prev, catalogModifications: filteredMods };
+          if (nMod) {
+            return {
+              ...eMod,
+              addonName: nMod.addonName,
+              type: nMod.type,
+              hideable: nMod.hideable,
+              searchable: nMod.searchable,
+            };
+          }
+          return eMod;
         });
-        if (!hideToast) toast.success('Catalogs fetched successfully');
-      } catch (error) {
-        console.error('Error fetching catalogs:', error);
-        if (error instanceof APIError) {
-          toast.error((error as APIError).message);
-        } else {
-          toast.error('Failed to fetch catalogs');
-        }
-      } finally {
-        setCatalogLoading(false);
+        catalogs.forEach((catalog) => {
+          if (!existingIds.has(`${catalog.id}-${catalog.type}`)) {
+            modifications.push({
+              id: catalog.id,
+              name: catalog.name,
+              type: catalog.type,
+              enabled: true,
+              shuffle: false,
+              usePosterService: !!(
+                currentUserData.rpdbApiKey ||
+                currentUserData.topPosterApiKey ||
+                currentUserData.aioratingsApiKey
+              ),
+              hideable: catalog.hideable,
+              searchable: catalog.searchable,
+              addonName: catalog.addonName,
+            });
+          }
+        });
+        const newCatalogIds = new Set(catalogs.map((c) => `${c.id}-${c.type}`));
+        const mergedCatalogIds = new Set(
+          (prev.mergedCatalogs || []).map((mc) => mc.id)
+        );
+        const filteredMods = modifications.filter(
+          (mod) =>
+            (mod.id.startsWith('aiostreams.merged.') &&
+              mergedCatalogIds.has(mod.id)) ||
+            newCatalogIds.has(`${mod.id}-${mod.type}`)
+        );
+        return { ...prev, catalogModifications: filteredMods };
+      });
+    },
+    onError: (error) => {
+      console.error('Error fetching catalogs:', error);
+      if (error instanceof APIError) {
+        toast.error((error as APIError).message);
+      } else {
+        toast.error('Failed to fetch catalogs');
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [userData.rpdbApiKey, userData.topPosterApiKey, userData.aioratingsApiKey]
+  });
+
+  const refreshCatalogs = useCallback(
+    (hideToast = false) => {
+      fetchCatalogsData(userData, {
+        onSuccess: hideToast
+          ? undefined
+          : () => toast.success('Catalogs fetched successfully'),
+      });
+    },
+    [fetchCatalogsData, userData]
   );
 
-  // Initial catalog fetch - fires once when the menu mounts.
+  // Initial catalog fetch — fires once when the menu mounts.
   useEffect(() => {
-    fetchCatalogsData(true);
+    fetchCatalogsData(userData);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const [search, setSearch] = useState('');
@@ -346,16 +343,19 @@ function Content() {
           >
             <>
               <div>
-                <h2>Installed</h2>
+                <div className="flex items-center gap-2">
+                  <h2>Installed</h2>
+                  {hasParent && isInherited('presets') && (
+                    <InheritedBadge section="presets" />
+                  )}
+                </div>
                 <p className="text-[--muted] text-sm">
                   Manage your installed addons and catalog settings.
                 </p>
               </div>
               <MenuTabs
                 activeTab={installedTab}
-                onTabChange={(v) =>
-                  setInstalledTab(v as 'addons' | 'catalogs')
-                }
+                onTabChange={(v) => setInstalledTab(v)}
                 defaultMobileOpen="addons"
                 tabs={[
                   {
@@ -387,7 +387,7 @@ function Content() {
                           <>
                             <CatalogSettingsCard
                               loading={catalogLoading}
-                              fetchCatalogsData={fetchCatalogsData}
+                              fetchCatalogsData={refreshCatalogs}
                             />
                             <MergedCatalogsCard />
                           </>

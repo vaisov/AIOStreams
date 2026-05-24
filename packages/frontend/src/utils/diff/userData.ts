@@ -7,10 +7,13 @@ export function filterForDiff(d: UserData | null): UserData | null {
   const filtered: any = { ...d };
   delete filtered.ip;
   delete filtered.uuid;
-  delete filtered.addonPassword;
+  delete filtered.accessToken;
   delete filtered.trusted;
   delete filtered.encryptedPassword;
   delete filtered.showChanges;
+  if (filtered.parentConfig?.password) {
+    filtered.parentConfig = { ...filtered.parentConfig, password: '[hidden]' };
+  }
   return sortKeys(filtered) as UserData;
 }
 

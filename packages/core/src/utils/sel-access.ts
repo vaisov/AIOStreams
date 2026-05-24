@@ -1,9 +1,14 @@
-import z from 'zod';
+﻿import z from 'zod';
 import { UserData } from '../db/schemas.js';
-import { Env } from './env.js';
-import { SyncManager, type SyncOverride, type FetchResult } from './sync.js';
+import { config } from '../config/index.js';
+import {
+  SyncManager,
+  type SyncOverride,
+  type FetchResult,
+  parseSyncedUrl,
+} from './sync.js';
 import { extractNamesFromExpression } from '../parser/streamExpression.js';
-import { createLogger } from './logger.js';
+import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('core');
 
@@ -37,14 +42,9 @@ export class SelAccess {
    */
   private static get manager(): SyncManager<StreamExpressionItem> {
     if (!this._instance) {
-      const configuredUrls = Env.WHITELISTED_SEL_URLS || [];
+      const configuredUrls = config.userLimits.sel.urls;
 
-      // WHITELISTED_SYNC_REFRESH_INTERVAL (seconds), fallback to old ms value converted to seconds
-      const refreshInterval =
-        Env.WHITELISTED_SYNC_REFRESH_INTERVAL ??
-        Math.floor(
-          (Env.ALLOWED_REGEX_PATTERNS_URLS_REFRESH_INTERVAL ?? 86400000) / 1000
-        );
+      const refreshInterval = config.userLimits.sync.refreshInterval;
 
       this._instance = new SyncManager<StreamExpressionItem>({
         cacheKey: 'sel-expressions',
@@ -79,9 +79,9 @@ export class SelAccess {
    * - `trusted` → trusted users can use any URL; others limited to whitelisted SEL URLs
    */
   public static validateUrls(urls: string[], userData?: UserData): string[] {
+    const access = config.userLimits.sel.access;
     const isUnrestricted =
-      Env.SEL_SYNC_ACCESS === 'all' ||
-      (Env.SEL_SYNC_ACCESS === 'trusted' && userData?.trusted);
+      access === 'all' || (access === 'trusted' && userData?.trusted);
 
     if (isUnrestricted) return urls;
 
@@ -136,7 +136,7 @@ export class SelAccess {
             url,
             items: [] as StreamExpressionItem[],
             error:
-              Env.SEL_SYNC_ACCESS === 'trusted' && !userData?.trusted
+              config.userLimits.sel.access === 'trusted' && !userData?.trusted
                 ? 'This URL is not in the allowed list. Contact the instance owner to whitelist it, or ask to be marked as a trusted user.'
                 : 'This URL is not allowed by the server configuration.',
           } satisfies FetchResult<StreamExpressionItem>;
@@ -159,36 +159,70 @@ export class SelAccess {
    * Override matching:
    * - By exact expression string match (`override.expression === item.expression`)
    * - By extracted names match: names extracted from expression comments vs `override.exprNames`
+   *
+   * Resolves `<SYNCED: url>` inline placeholders in-place; unplaced URLs
+   * are appended at the end. Dangling placeholders are stripped.
    */
   public static async syncStreamExpressions<U>(
     urls: string[] | undefined,
     existing: U[],
     userData: UserData,
     transform: (item: StreamExpressionItem) => U,
-    uniqueKey: (item: U) => string
+    getField: (item: U) => string
   ): Promise<U[]> {
-    const expressions = await this.resolveExpressions(urls, userData);
-    if (expressions.length === 0) return existing;
+    const validUrls = urls?.length ? this.validateUrls(urls, userData) : [];
 
-    const result = [...existing];
-    const existingSet = new Set(existing.map(uniqueKey));
+    if (validUrls.length === 0) {
+      const cleaned = existing.filter(
+        (item) => !parseSyncedUrl(getField(item))
+      );
+      return cleaned.length === existing.length ? existing : cleaned;
+    }
+
+    const validUrlSet = new Set(validUrls);
+    const urlExprMap = new Map<string, StreamExpressionItem[]>();
+    await Promise.all(
+      validUrls.map(async (url) => {
+        const exprs = await this.getExpressionsForUrl(url);
+        urlExprMap.set(url, exprs);
+      })
+    );
+
     const overrides: SyncOverride[] = userData.selOverrides || [];
+    const result: U[] = [];
+    const resolvedInlineUrls = new Set<string>();
 
-    for (const expr of expressions) {
-      const override = this._findSelOverride(expr, overrides);
+    const pushExpressions = (expressions: StreamExpressionItem[]) => {
+      for (const expr of expressions) {
+        const override = this._findSelOverride(expr, overrides);
 
-      if (override?.disabled) continue;
+        if (override?.disabled) continue;
 
-      const overriddenExpr = override
-        ? this._applySelOverride(expr, override)
-        : expr;
+        const overriddenExpr = override
+          ? this._applySelOverride(expr, override)
+          : expr;
 
-      const item = transform(overriddenExpr);
-      const key = uniqueKey(item);
-      if (!existingSet.has(key)) {
-        result.push(item);
-        existingSet.add(key);
+        result.push(transform(overriddenExpr));
       }
+    };
+
+    for (const item of existing) {
+      const placeholderUrl = parseSyncedUrl(getField(item));
+
+      if (placeholderUrl) {
+        if (validUrlSet.has(placeholderUrl)) {
+          resolvedInlineUrls.add(placeholderUrl);
+          pushExpressions(urlExprMap.get(placeholderUrl) ?? []);
+        }
+        continue;
+      }
+
+      result.push(item);
+    }
+
+    for (const url of validUrls) {
+      if (resolvedInlineUrls.has(url)) continue;
+      pushExpressions(urlExprMap.get(url) ?? []);
     }
 
     return result;

@@ -151,6 +151,15 @@ export async function api<T>(
   // Check content type
   const contentType = response.headers.get('Content-Type') ?? '';
   if (!contentType.includes('application/json')) {
+    // A redirect to the login page means the session expired server-side.
+    // Navigate the browser to login (full reload clears all query cache).
+    if (response.url.includes('/login')) {
+      const next = encodeURIComponent(
+        window.location.pathname + window.location.search
+      );
+      window.location.href = `/login?next=${next}`;
+      await new Promise(() => {});
+    }
     throw new Error(
       `Expected JSON response but got ${contentType} response of ${response.status} ${response.statusText}`
     );
@@ -239,12 +248,54 @@ interface GDriveTokenResponse {
 }
 
 /**
+ * Auth / session
+ */
+export interface SessionUser {
+  username: string;
+  isAdmin: boolean;
+}
+
+export async function login(username: string, password: string) {
+  return api<SessionUser>('POST /auth/login', {
+    body: { username, password },
+  });
+}
+
+export async function logout() {
+  return api<void>('POST /auth/logout');
+}
+
+export async function getSession() {
+  return api<SessionUser>('/auth/me');
+}
+
+/**
+ * Build the value for an `Authorization: Basic base64(uuid:password)` header.
+ * Used by all User API requests that require credentials.
+ */
+function basicAuthHeader(uuid: string, password: string): string {
+  // btoa requires latin-1; encode as UTF-8 bytes first to support non-ASCII chars.
+  const bytes = new TextEncoder().encode(`${uuid}:${password}`);
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return `Basic ${btoa(binary)}`;
+}
+
+/**
  * Load user configuration
  */
 export async function loadUserConfig(uuid: string, password: string) {
-  return api<LoadUserResponse>(
-    `GET /user?uuid=${uuid}&password=${encodeURIComponent(password)}`
-  );
+  return api<LoadUserResponse>('GET /user', {
+    headers: { Authorization: basicAuthHeader(uuid, password) },
+  });
+}
+
+export async function loadRawUserConfig(uuid: string, password: string) {
+  return api<LoadUserResponse>('GET /user?raw=true', {
+    headers: { Authorization: basicAuthHeader(uuid, password) },
+  });
 }
 
 /**
@@ -265,7 +316,20 @@ export async function updateUserConfig(
   password: string
 ) {
   return api<UpdateUserResponse>('PUT /user', {
-    body: { uuid, config, password },
+    body: { config },
+    headers: { Authorization: basicAuthHeader(uuid, password) },
+  });
+}
+
+/**
+ * Verify a UUID + password pair (used when linking a parent config)
+ */
+export async function verifyParentConfig(
+  uuid: string,
+  password: string
+): Promise<{ uuid: string; createdAt: string }> {
+  return api<{ uuid: string; createdAt: string }>('POST /user/verify', {
+    headers: { Authorization: basicAuthHeader(uuid, password) },
   });
 }
 
@@ -274,7 +338,7 @@ export async function updateUserConfig(
  */
 export async function deleteUserConfig(uuid: string, password: string) {
   return api<void>('DELETE /user', {
-    body: { uuid, password },
+    headers: { Authorization: basicAuthHeader(uuid, password) },
   });
 }
 
@@ -287,7 +351,8 @@ export async function changePassword(
   newPassword: string
 ) {
   return api<{ encryptedPassword: string }>('POST /user/password', {
-    body: { uuid, currentPassword, newPassword },
+    body: { newPassword },
+    headers: { Authorization: basicAuthHeader(uuid, currentPassword) },
   });
 }
 
@@ -365,6 +430,70 @@ export async function exchangeGDriveCode(code: string) {
  */
 export async function fetchTemplates() {
   return api<any[]>('GET /templates');
+}
+
+/**
+ * Per-user analytics breakdown for the configure-page Stats tab.
+ *
+ * The shape mirrors `AnalyticsRepository.userBreakdown(...)` on the server.
+ * `range` is clamped server-side to whatever the configured raw retention
+ * window allows (typically 7d).
+ */
+export interface UserAnalyticsAddon {
+  presetType: string;
+  instanceHash: string;
+  /** User-set addon display name (latest in window) — may be null for very
+   *  old rows captured before the column existed. */
+  addonName: string | null;
+  requests: number;
+  status: { ok: number; error: number; empty: number };
+  avgLatencyMs: number | null;
+  avgRawCount: number;
+  avgFinalContribution: number;
+  finalShare: number;
+  cutOffRate: number;
+  errorRate: number;
+  emptyRate: number;
+  redundant: boolean;
+  slow: boolean;
+}
+export interface UserAnalyticsService {
+  serviceId: string;
+  finalCount: number;
+  cachedCount: number;
+  uncachedCount: number;
+  cachedShare: number;
+  contributingAddons: string[];
+}
+export interface UserAnalyticsResponse {
+  range: '24h' | '7d';
+  windowMs: number;
+  generatedAt: number;
+  totals: {
+    requests: number;
+    finalCountAvg: number;
+    cutOffRate: number;
+    errorRate: number;
+    mergedRequests: number;
+  };
+  perAddon: UserAnalyticsAddon[];
+  perService: UserAnalyticsService[];
+  latencyLeaderboard: Array<{
+    presetType: string;
+    instanceHash: string;
+    addonName: string | null;
+    avgLatencyMs: number;
+  }>;
+}
+
+export async function fetchUserAnalytics(
+  uuid: string,
+  password: string,
+  range: '24h' | '7d'
+) {
+  return api<UserAnalyticsResponse>(`GET /user/analytics?range=${range}`, {
+    headers: { Authorization: basicAuthHeader(uuid, password) },
+  });
 }
 
 /**

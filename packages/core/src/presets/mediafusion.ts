@@ -6,9 +6,10 @@ import {
   Stream,
   ParsedStream,
 } from '../db/index.js';
-import { baseOptions, Preset } from './preset.js';
-import { createLogger, Env, getSimpleTextHash } from '../utils/index.js';
+import { baseOptions, CacheKeyRequestOptions, Preset } from './preset.js';
+import { createLogger, getSimpleTextHash } from '../utils/index.js';
 import { constants, ServiceId } from '../utils/index.js';
+import { config as appConfig } from '../config/index.js';
 import { StreamParser } from '../parser/index.js';
 
 const logger = createLogger('core');
@@ -159,8 +160,9 @@ export class MediaFusionPreset extends Preset {
       ...baseOptions(
         'MediaFusion',
         supportedResources,
-        Env.DEFAULT_MEDIAFUSION_TIMEOUT,
-        Env.MEDIAFUSION_URL
+        appConfig.presets.mediafusion.defaultTimeout ??
+          appConfig.presets.defaultTimeout,
+        appConfig.presets.mediafusion.url ?? undefined
       ),
       {
         id: 'useCachedResultsOnly',
@@ -168,8 +170,8 @@ export class MediaFusionPreset extends Preset {
         description:
           "Only show results that are already cached in MediaFusion's database from previous searches. This disables live searching, making requests faster but potentially showing fewer results.",
         type: 'boolean',
-        forced: Env.MEDIAFUSION_FORCED_USE_CACHED_RESULTS_ONLY,
-        default: Env.MEDIAFUSION_DEFAULT_USE_CACHED_RESULTS_ONLY,
+        forced: appConfig.presets.mediafusion.forcedUseCachedResultsOnly,
+        default: appConfig.presets.mediafusion.defaultUseCachedResultsOnly,
         showInSimpleMode: false,
       },
       {
@@ -313,9 +315,13 @@ export class MediaFusionPreset extends Preset {
       ID: 'mediafusion',
       NAME: 'MediaFusion',
       LOGO: `https://raw.githubusercontent.com/mhdzumair/MediaFusion/refs/heads/main/resources/images/mediafusion_logo.png`,
-      URL: Env.MEDIAFUSION_URL[0],
-      TIMEOUT: Env.DEFAULT_MEDIAFUSION_TIMEOUT || Env.DEFAULT_TIMEOUT,
-      USER_AGENT: Env.DEFAULT_MEDIAFUSION_USER_AGENT || Env.DEFAULT_USER_AGENT,
+      URL: appConfig.presets.mediafusion.url,
+      TIMEOUT:
+        appConfig.presets.mediafusion.defaultTimeout ??
+        appConfig.presets.defaultTimeout,
+      USER_AGENT:
+        appConfig.presets.mediafusion.defaultUserAgent ??
+        appConfig.http.defaultUserAgent,
       SUPPORTED_SERVICES: supportedServices,
       DESCRIPTION:
         'Universal Stremio Add-on for Movies, Series, Live TV & Sports Events',
@@ -401,15 +407,25 @@ export class MediaFusionPreset extends Preset {
     };
   }
 
+  public static getCacheKey(
+    options: CacheKeyRequestOptions
+  ): string | undefined {
+    const { headers } = options;
+    if (headers?.encoded_user_data) {
+      return getSimpleTextHash(headers.encoded_user_data);
+    }
+    return undefined;
+  }
+
   private static generateManifestUrl(
     options: Record<string, any>,
     encodedUserData: string
   ) {
-    const url = (options.url || this.METADATA.URL).replace(/\/$/, '');
+    const url = (options.url || this.DEFAULT_URL).replace(/\/$/, '');
     if (url.endsWith('/manifest.json')) {
       return url;
     }
-    return `${url}/${getSimpleTextHash(encodedUserData)}/manifest.json`;
+    return `${url}/manifest.json`;
   }
 
   private static generateEncodedUserData(
@@ -453,14 +469,16 @@ export class MediaFusionPreset extends Preset {
         ],
         enable_catalogs: true,
         enable_imdb_metadata: false,
+        min_size: 0,
         max_size: 'inf',
-        max_streams_per_resolution: '500',
+        max_streams_per_resolution: 500,
+        max_streams: 100,
         torrent_sorting_priority: [
-          { key: 'language', direction: 'desc' },
           { key: 'cached', direction: 'desc' },
           { key: 'resolution', direction: 'desc' },
           { key: 'quality', direction: 'desc' },
           { key: 'size', direction: 'desc' },
+          { key: 'language', direction: 'desc' },
           { key: 'seeders', direction: 'desc' },
           { key: 'created_at', direction: 'desc' },
         ],
@@ -530,10 +548,36 @@ export class MediaFusionPreset extends Preset {
           'CAM/Screener',
           'Unknown',
         ],
-        api_password: Env.MEDIAFUSION_API_PASSWORD,
+        hdr_filter: [
+          'HDR10',
+          'HDR10+',
+          'Dolby Vision',
+          'HLG',
+          'SDR',
+          'Unknown',
+        ],
+        api_password: appConfig.presets.mediafusion.apiPassword,
         mediaflow_config: null,
         rpdb_config: null,
         live_search_streams: !options.useCachedResultsOnly,
+        include_anime: true,
+        enable_usenet_streams: true,
+        prefer_usenet_over_torrent: false,
+        enable_telegram_streams: false,
+        enable_acestream_streams: false,
+        stream_type_grouping: 'separate',
+        stream_type_order: [
+          'torrent',
+          'usenet',
+          'telegram',
+          'http',
+          'acestream',
+          'youtube',
+        ],
+        provider_grouping: 'separate',
+        stream_name_filter_mode: 'disabled',
+        stream_name_filter_patterns: [],
+        stream_name_filter_use_regex: false,
         contribution_streams: options.contributorStreams ?? false,
         mdblist_config: null,
       },

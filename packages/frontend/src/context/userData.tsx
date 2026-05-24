@@ -13,6 +13,26 @@ const USER_DATA_KEY = 'aiostreams-user-data';
 
 export function applyMigrations(config: any): UserData {
   if (
+    config &&
+    config.addonPassword !== undefined &&
+    config.accessToken === undefined
+  ) {
+    config.accessToken = config.addonPassword;
+  }
+  if (config && config.addonPassword !== undefined) {
+    delete config.addonPassword;
+  }
+  if (
+    config &&
+    config.accessToken !== undefined &&
+    config.accessKey === undefined
+  ) {
+    config.accessKey = config.accessToken;
+  }
+  if (config && config.accessToken !== undefined) {
+    delete config.accessToken;
+  }
+  if (
     config.deduplicator &&
     typeof config.deduplicator.multiGroupBehaviour === 'string'
   ) {
@@ -233,6 +253,14 @@ export function applyMigrations(config: any): UserData {
     });
   }
 
+  if (config.formatter && config.formatter.definition) {
+    config.formatter.definitions = {
+      ...(config.formatter.definitions ?? {}),
+      custom: config.formatter.definition,
+    };
+    delete config.formatter.definition;
+  }
+
   return config;
 }
 
@@ -340,6 +368,10 @@ export const DefaultUserData: UserData = {
         direction: 'desc',
       },
       {
+        key: 'subtitle',
+        direction: 'desc',
+      },
+      {
         key: 'size',
         direction: 'desc',
       },
@@ -374,12 +406,14 @@ export const DefaultUserData: UserData = {
     enabled: false,
     position: 'bottom',
     statsToShow: ['addon', 'filter', 'timing'],
+    showFilterStatsOnNoStreams: true,
   },
   digitalReleaseFilter: {
     enabled: false,
     tolerance: 0,
     requestTypes: [],
     addons: [],
+    showInfoOnFilter: true,
   },
   ageRangeTypes: ['usenet'],
   seasonEpisodeMatching: {
@@ -442,9 +476,11 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(USER_DATA_KEY, JSON.stringify(userData));
   }, [userData]);
 
-  // Effect to apply forced and default values from status
+  const statusApplied = React.useRef(false);
+
   React.useEffect(() => {
-    if (!status) return;
+    if (!status || statusApplied.current) return;
+    statusApplied.current = true;
 
     const forced = status.settings.forced;
     const defaults = status.settings.defaults;
@@ -532,4 +568,32 @@ export function useUserData() {
     throw new Error('useUserData must be used within a UserDataProvider');
   }
   return context;
+}
+
+export function useParentInheritance() {
+  const { userData } = useUserData();
+  const parentConfig = userData?.parentConfig;
+  const strategies = parentConfig?.mergeStrategies;
+
+  function isInherited(
+    section:
+      | 'presets'
+      | 'services'
+      | 'filters'
+      | 'sorting'
+      | 'formatter'
+      | 'proxy'
+      | 'metadata'
+      | 'misc'
+  ): boolean {
+    if (!parentConfig) return false;
+    const strategy = strategies?.[section] ?? 'inherit';
+    return strategy === 'inherit';
+  }
+
+  return {
+    hasParent: !!parentConfig,
+    parentUuid: parentConfig?.uuid,
+    isInherited,
+  };
 }

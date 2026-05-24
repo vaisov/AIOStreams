@@ -1,13 +1,14 @@
-import {
+﻿import {
+  Addon,
   Option,
   ParsedFile,
   ParsedStream,
   Stream,
   UserData,
 } from '../db/index.js';
-import { convertLangCodeToName, mapLanguageCode } from '../parser/file.js';
+import { convertLangCodeToName, mapLanguageCode } from '../utils/languages.js';
 import StreamParser from '../parser/streams.js';
-import { Env, constants } from '../utils/index.js';
+import { appConfig, constants } from '../utils/index.js';
 import { BuiltinStreamParser } from './builtin.js';
 import { baseOptions } from './preset.js';
 import { StremThruPreset } from './stremthru.js';
@@ -15,6 +16,17 @@ import { TorznabPreset } from './torznab.js';
 
 export class NekoBtStreamParser extends BuiltinStreamParser {
   private static TAGS_REGEX = /\{Tags:\s*([^}]*)\}\s*$/i;
+
+  // nekoBT omits the dash in regional language codes; map them to proper BCP 47
+  private static LANG_CODE_MAP: Record<string, string> = {
+    frfr: 'fr-FR',
+    ptbr: 'pt-BR',
+    ptpt: 'pt-PT',
+    eses: 'es-ES',
+    es419: 'es-419',
+    zhhans: 'zh-Hans',
+    zhhant: 'zh-TW',
+  };
 
   // Video quality mapping (indexes per nekoBT comment)
   // Each index corresponds to the numeric ID used by nekoBT tags.
@@ -56,6 +68,10 @@ export class NekoBtStreamParser extends BuiltinStreamParser {
     { name: 'VC1' },
   ];
 
+  private static normalizeNekoBtLangCode(code: string): string {
+    return NekoBtStreamParser.LANG_CODE_MAP[code.toLowerCase()] ?? code;
+  }
+
   private extractTagsFromString(input: string): Record<string, any> {
     const result: Record<string, any> = {};
     if (!input) return result;
@@ -79,8 +95,8 @@ export class NekoBtStreamParser extends BuiltinStreamParser {
       } else if (/^C\d+$/.test(token)) {
         const idx = parseInt(token.slice(1), 10);
         result.codecTag = NekoBtStreamParser.VIDEO_CODEC_MAP[idx] ?? undefined;
-      } else if (/^[AFS]-/.test(token)) {
-        // language tags like A-en or F-en,jp
+      } else if (/^[AFS]=/.test(token)) {
+        // language tags like A=en or F=en,jp
         const kind = token[0];
         const langs =
           token
@@ -112,23 +128,38 @@ export class NekoBtStreamParser extends BuiltinStreamParser {
     if (!parsedStream.filename && !parsedStream.folderName) {
       return undefined;
     }
+    const addBackAutoTitleTags =
+      this.addon.preset.options.leaveAutoTitleTagsInFilename ?? false;
+    let titleTag = '';
 
     const filenameTags = this.extractTagsFromString(
       parsedStream.filename ?? ''
     );
     if (parsedStream.filename && Object.keys(filenameTags).length > 0) {
-      parsedStream.filename = parsedStream.filename
-        .replace(NekoBtStreamParser.TAGS_REGEX, '')
-        .trim();
+      const titleTagMatch = parsedStream.filename.match(
+        NekoBtStreamParser.TAGS_REGEX
+      );
+      if (titleTagMatch) {
+        titleTag = titleTagMatch[0];
+        parsedStream.filename = parsedStream.filename
+          .replace(NekoBtStreamParser.TAGS_REGEX, '')
+          .trim();
+      }
     }
 
     const folderTags = this.extractTagsFromString(
       parsedStream.folderName ?? ''
     );
     if (parsedStream.folderName && Object.keys(folderTags).length > 0) {
-      parsedStream.folderName = parsedStream.folderName
-        .replace(NekoBtStreamParser.TAGS_REGEX, '')
-        .trim();
+      const titleTagMatch = parsedStream.folderName.match(
+        NekoBtStreamParser.TAGS_REGEX
+      );
+      if (titleTagMatch) {
+        titleTag = titleTagMatch[0];
+        parsedStream.folderName = parsedStream.folderName
+          .replace(NekoBtStreamParser.TAGS_REGEX, '')
+          .trim();
+      }
     }
 
     const fileMetadata: Record<string, any> | undefined =
@@ -160,6 +191,7 @@ export class NekoBtStreamParser extends BuiltinStreamParser {
       }
       // audio languages
       [...(fileMetadata.audioLanguages ?? [])]
+        .map(NekoBtStreamParser.normalizeNekoBtLangCode)
         .map(mapLanguageCode)
         .map(convertLangCodeToName)
         .forEach((lang: string | undefined) => {
@@ -174,6 +206,7 @@ export class NekoBtStreamParser extends BuiltinStreamParser {
         ...(fileMetadata.fansubLanguages ?? []),
         ...(fileMetadata.subtitleLanguages ?? []),
       ]
+        .map(NekoBtStreamParser.normalizeNekoBtLangCode)
         .map(mapLanguageCode)
         .map(convertLangCodeToName)
         .forEach((lang: string | undefined) => {
@@ -182,6 +215,12 @@ export class NekoBtStreamParser extends BuiltinStreamParser {
             parsedFile.subtitles.push(lang);
           }
         });
+    }
+
+    // add back after parsing so it is not interfering with filename parsing.
+    if (addBackAutoTitleTags && titleTag) {
+      parsedStream.filename =
+        `${parsedStream.filename ?? ''} ${titleTag}`.trim();
     }
 
     return parsedFile;
@@ -198,7 +237,7 @@ export class NekoBtPreset extends TorznabPreset {
       ...baseOptions(
         'nekoBT',
         supportedResources,
-        Env.BUILTIN_DEFAULT_NEKOBT_TIMEOUT || Env.DEFAULT_TIMEOUT
+        appConfig.builtins.nekobt.timeout ?? appConfig.presets.defaultTimeout
       ).filter((option) => option.id !== 'url' && option.id !== 'resources'),
       {
         id: 'apiKey',
@@ -248,6 +287,21 @@ export class NekoBtPreset extends TorznabPreset {
         ],
       },
       {
+        id: 'searchMode',
+        name: 'Search Mode',
+        description:
+          'The search mode to use when querying the nekoBT endpoint. **Note**: `Both` will result in two addons being created, one for each search mode.',
+        type: 'select',
+        required: false,
+        showInSimpleMode: false,
+        default: 'both',
+        options: [
+          { label: 'Auto', value: 'auto' },
+          { label: 'Forced Query', value: 'query' },
+          { label: 'Both', value: 'both' },
+        ],
+      },
+      {
         id: 'useMultipleInstances',
         name: 'Use Multiple Instances',
         description:
@@ -257,6 +311,14 @@ export class NekoBtPreset extends TorznabPreset {
         showInSimpleMode: false,
       },
       {
+        id: 'leaveAutoTitleTagsInFilename',
+        name: 'Leave Auto Title Tags in Filename',
+        description:
+          'By default, [nekoBT auto title tags](https://wiki.nekobt.to/info/metadata/#auto-titles) (e.g. {Tags: ...}) are stripped from the filename after taking what we can. Enabling this option will leave them in. This may be useful if you want to use info that is not parsed (e.g. Sub level, MTL/OTL/HS tags) via regex.',
+        type: 'boolean',
+        default: false,
+      },
+      {
         id: 'socials',
         name: '',
         description: '',
@@ -264,7 +326,7 @@ export class NekoBtPreset extends TorznabPreset {
         socials: [
           {
             id: 'website',
-            url: Env.BUILTIN_NEKOBT_URL.replace('/api/torznab', ''),
+            url: appConfig.builtins.nekobt.url.replace('/api/torznab', ''),
           },
         ],
       },
@@ -274,9 +336,10 @@ export class NekoBtPreset extends TorznabPreset {
       ID: 'neko-bt',
       NAME: 'nekoBT',
       LOGO: 'https://avatars.githubusercontent.com/u/221218851?v=4',
-      URL: Env.BUILTIN_NEKOBT_URL,
-      TIMEOUT: Env.BUILTIN_DEFAULT_NEKOBT_TIMEOUT || Env.DEFAULT_TIMEOUT,
-      USER_AGENT: Env.DEFAULT_USER_AGENT,
+      URL: [appConfig.builtins.nekobt.url],
+      TIMEOUT:
+        appConfig.builtins.nekobt.timeout ?? appConfig.presets.defaultTimeout,
+      USER_AGENT: appConfig.http.defaultUserAgent,
       SUPPORTED_SERVICES: StremThruPreset.supportedServices,
       DESCRIPTION: 'An addon to get debrid results from nekoBT.',
       OPTIONS: options,
@@ -291,7 +354,7 @@ export class NekoBtPreset extends TorznabPreset {
     services: constants.ServiceId[],
     options: Record<string, any>
   ): string {
-    const nekoBtUrl = this.METADATA.URL;
+    const nekoBtUrl = this.DEFAULT_URL;
 
     const config = {
       ...this.getBaseConfig(userData, services),
@@ -299,10 +362,10 @@ export class NekoBtPreset extends TorznabPreset {
       apiKey: options.apiKey,
       apiPath: '/api',
       paginate: false,
-      forceQuerySearch: true,
+      forceQuerySearch: options.forceQuerySearch ?? false,
     };
 
     const configString = this.base64EncodeJSON(config, 'urlSafe');
-    return `${Env.INTERNAL_URL}/builtins/torznab/${configString}/manifest.json`;
+    return `${appConfig.bootstrap.internalUrl}/builtins/torznab/${configString}/manifest.json`;
   }
 }

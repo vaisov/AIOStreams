@@ -6,11 +6,12 @@ import {
   ParsedStream,
 } from '../db/index.js';
 import { baseOptions, Preset } from './preset.js';
-import { Env } from '../utils/index.js';
 import { constants, ServiceId } from '../utils/index.js';
+import { config as appConfig } from '../config/index.js';
 import { StreamParser } from '../parser/index.js';
 import { Stream } from '../db/index.js';
 import { validateInfoHash } from '../builtins/utils/debrid.js';
+import { PresetMetadata } from '../db/schemas.js';
 
 class TorboxStreamParser extends StreamParser {
   override getSeeders(
@@ -110,7 +111,7 @@ export class TorboxAddonPreset extends Preset {
     return TorboxStreamParser;
   }
 
-  static override get METADATA() {
+  static override get METADATA(): PresetMetadata {
     const supportedServices: ServiceId[] = [constants.TORBOX_SERVICE];
 
     const supportedResources = [
@@ -120,7 +121,12 @@ export class TorboxAddonPreset extends Preset {
     ];
 
     const options: Option[] = [
-      ...baseOptions('TorBox', supportedResources, Env.DEFAULT_TORBOX_TIMEOUT),
+      ...baseOptions(
+        'TorBox',
+        supportedResources,
+        appConfig.presets.torbox.defaultTimeout ??
+          appConfig.presets.defaultTimeout
+      ),
       {
         id: 'mediaTypes',
         name: 'Media Types',
@@ -149,9 +155,13 @@ export class TorboxAddonPreset extends Preset {
       ID: 'torbox',
       NAME: 'TorBox',
       LOGO: 'https://torbox.app/android-chrome-512x512.png',
-      URL: Env.TORBOX_STREMIO_URL,
-      TIMEOUT: Env.DEFAULT_TORBOX_TIMEOUT || Env.DEFAULT_TIMEOUT,
-      USER_AGENT: Env.DEFAULT_TORBOX_USER_AGENT || Env.DEFAULT_USER_AGENT,
+      URL: appConfig.presets.torbox.url,
+      TIMEOUT:
+        appConfig.presets.torbox.defaultTimeout ??
+        appConfig.presets.defaultTimeout,
+      USER_AGENT:
+        appConfig.presets.torbox.defaultUserAgent ??
+        appConfig.http.defaultUserAgent,
       SUPPORTED_SERVICES: supportedServices,
       DESCRIPTION:
         'Provides torrent and usenet streams for users of TorBox.app',
@@ -161,6 +171,11 @@ export class TorboxAddonPreset extends Preset {
         constants.USENET_STREAM_TYPE,
       ],
       SUPPORTED_RESOURCES: supportedResources,
+      DISABLED: {
+        removed: true,
+        disabled: true,
+        reason: 'TorBox addon is deprecated.',
+      },
     };
   }
 
@@ -197,7 +212,7 @@ export class TorboxAddonPreset extends Preset {
     userData: UserData,
     options: Record<string, any>
   ) {
-    let url = options.url || this.METADATA.URL;
+    let url = options.url || this.DEFAULT_URL;
     if (url.endsWith('/manifest.json')) {
       return url;
     }

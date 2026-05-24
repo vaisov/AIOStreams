@@ -1,4 +1,4 @@
-import {
+﻿import {
   CacheAndPlaySchema,
   Manifest,
   Meta,
@@ -13,13 +13,13 @@ import {
   constants,
   encryptString,
   enrichParsedIdWithAnimeEntry,
-  Env,
   formatZodError,
   fromUrlSafeBase64,
   getSimpleTextHash,
   getTimeTakenSincePoint,
   SERVICE_DETAILS,
 } from '../../utils/index.js';
+import { config as appConfig } from '../../config/index.js';
 import { TorrentClient } from '../../utils/torrent.js';
 import {
   BuiltinDebridServices,
@@ -41,7 +41,7 @@ import { processTorrents, processNZBs } from '../utils/debrid.js';
 import { calculateAbsoluteEpisode } from '../utils/general.js';
 import { MetadataService } from '../../metadata/service.js';
 import { MetadataTitle } from '../../metadata/utils.js';
-import { Logger } from 'winston';
+import type { Logger } from '../../logging/logger.js';
 import pLimit from 'p-limit';
 import { cleanTitle } from '../../parser/utils.js';
 import { NzbDavConfig, NzbDAVService } from '../../debrid/nzbdav.js';
@@ -393,210 +393,28 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
     await metadataStore().set(
       metadataId,
       titleMetadata,
-      Env.BUILTIN_PLAYBACK_LINK_VALIDITY,
+      appConfig.builtins.debrid.playbackLinkValidity,
       true
     );
 
     const results = [...processedTorrents.results, ...processedNzbs.results];
 
-    // Setup auth for both NzbDAV and Altmount
-    let nzbdavAuth: z.infer<typeof NzbDavConfig> | undefined;
-    let altmountAuth: z.infer<typeof AltmountConfig> | undefined;
-
-    const encodedNzbdavAuth = this.userData.services.find(
-      (s) => s.id === 'nzbdav'
-    )?.credential;
-    const encodedAltmountAuth = this.userData.services.find(
-      (s) => s.id === 'altmount'
-    )?.credential;
-
-    if (encodedNzbdavAuth) {
-      const { success, data } = NzbDavConfig.safeParse(
-        JSON.parse(fromUrlSafeBase64(encodedNzbdavAuth))
-      );
-      if (success) {
-        nzbdavAuth = data;
-      }
-    }
-
-    if (encodedAltmountAuth) {
-      const { success, data } = AltmountConfig.safeParse(
-        JSON.parse(fromUrlSafeBase64(encodedAltmountAuth))
-      );
-      if (success) {
-        altmountAuth = data;
-      }
-    }
-
-    // Collect indices for proxying
-    const nzbdavProxyIndices: number[] = [];
-    const altmountProxyIndices: number[] = [];
-
-    if (nzbdavAuth && nzbdavAuth.aiostreamsAuth) {
-      nzbdavProxyIndices.push(
-        ...results
-          .map((result, index) => ({ result, index }))
-          .filter(({ result }) => result.service?.id === 'nzbdav')
-          .map(({ index }) => index)
-      );
-    }
-
-    if (altmountAuth && altmountAuth.aiostreamsAuth) {
-      altmountProxyIndices.push(
-        ...results
-          .map((result, index) => ({ result, index }))
-          .filter(({ result }) => result.service?.id === 'altmount')
-          .map(({ index }) => index)
-      );
-    }
-
     let resultStreams = await Promise.all(
       results.map((result) => {
-        const stream = this._createStream(
-          result,
-          metadataId,
-          encryptedStoreAuths
-        );
-        if (
-          result.service?.id === 'nzbdav' &&
-          nzbdavAuth &&
-          nzbdavAuth.webdavUser &&
-          nzbdavAuth.webdavPassword
-        ) {
-          stream.behaviorHints = {
-            ...stream.behaviorHints,
-            notWebReady: true,
-            proxyHeaders: {
-              request: {
-                Authorization: `Basic ${Buffer.from(
-                  `${nzbdavAuth.webdavUser}:${nzbdavAuth.webdavPassword}`
-                ).toString('base64')}`,
-              },
-            },
-          };
-        } else if (result.service?.id === 'altmount' && altmountAuth) {
-          stream.behaviorHints = {
-            ...stream.behaviorHints,
-            notWebReady: true,
-            proxyHeaders: {
-              request: {
-                Authorization: `Basic ${Buffer.from(
-                  `${altmountAuth.webdavUser}:${altmountAuth.webdavPassword}`
-                ).toString('base64')}`,
-              },
-            },
-          };
-        }
-        return stream;
+        return this._createStream(result, metadataId, encryptedStoreAuths);
       })
     );
+    const streamServiceIds = results.map((result) => result.service?.id);
     // Flush fileInfo store so all playback URLs are resolvable before any
     // preload/precache ping hits the /playback/ route.
     await fileInfoStore()?.flush();
-    // Proxy NzbDAV streams
-    if (nzbdavProxyIndices.length > 0 && nzbdavAuth?.aiostreamsAuth) {
-      const proxy = createProxy({
-        id: 'builtin',
-        enabled: true,
-        credentials: nzbdavAuth.aiostreamsAuth,
-      });
 
-      const proxiedStreams = await proxy.generateUrls(
-        nzbdavProxyIndices
-          .map((i) => resultStreams[i])
-          .map((stream) => ({
-            url: stream.url!,
-            filename: stream.behaviorHints?.filename ?? undefined,
-            headers:
-              nzbdavAuth.webdavUser && nzbdavAuth.webdavPassword
-                ? {
-                    request: {
-                      Authorization: `Basic ${Buffer.from(
-                        `${nzbdavAuth.webdavUser}:${nzbdavAuth.webdavPassword}`
-                      ).toString('base64')}`,
-                    },
-                  }
-                : undefined,
-          }))
-      );
-
-      if (proxiedStreams && !('error' in proxiedStreams)) {
-        for (let i = 0; i < nzbdavProxyIndices.length; i++) {
-          const index = nzbdavProxyIndices[i];
-          const proxiedUrl = proxiedStreams[i];
-          if (proxiedUrl) {
-            resultStreams[index].url = proxiedUrl;
-            resultStreams[index].behaviorHints = {
-              ...resultStreams[index].behaviorHints,
-              notWebReady: undefined,
-              proxyHeaders: undefined,
-            };
-          }
-        }
-      } else {
-        errorStreams.push(
-          this._createErrorStream({
-            title: `${this.name}`,
-            description: `Failed to proxy NzbDAV streams, ensure your proxy auth is correct.`,
-          })
-        );
-        // remove all nzbdav streams
-        resultStreams = resultStreams.filter(
-          (_, i) => !nzbdavProxyIndices.includes(i)
-        );
-      }
-    }
-
-    // Proxy Altmount streams
-    if (altmountProxyIndices.length > 0 && altmountAuth?.aiostreamsAuth) {
-      const proxy = createProxy({
-        id: 'builtin',
-        enabled: true,
-        credentials: altmountAuth.aiostreamsAuth,
-      });
-
-      const proxiedStreams = await proxy.generateUrls(
-        altmountProxyIndices
-          .map((i) => resultStreams[i])
-          .map((stream) => ({
-            url: stream.url!,
-            filename: stream.behaviorHints?.filename ?? undefined,
-            headers: {
-              request: {
-                Authorization: `Basic ${Buffer.from(
-                  `${altmountAuth.webdavUser}:${altmountAuth.webdavPassword}`
-                ).toString('base64')}`,
-              },
-            },
-          }))
-      );
-
-      if (proxiedStreams && !('error' in proxiedStreams)) {
-        for (let i = 0; i < altmountProxyIndices.length; i++) {
-          const index = altmountProxyIndices[i];
-          const proxiedUrl = proxiedStreams[i];
-          if (proxiedUrl) {
-            resultStreams[index].url = proxiedUrl;
-            resultStreams[index].behaviorHints = {
-              ...resultStreams[index].behaviorHints,
-              notWebReady: undefined,
-              proxyHeaders: undefined,
-            };
-          }
-        }
-      } else {
-        errorStreams.push(
-          this._createErrorStream({
-            title: `${this.name}`,
-            description: `Failed to proxy Altmount streams, ensure your proxy auth is correct.`,
-          })
-        );
-        // remove all altmount streams
-        resultStreams = resultStreams.filter(
-          (_, i) => !altmountProxyIndices.includes(i)
-        );
-      }
-    }
+    const proxied = await this._applyServiceProxying(
+      resultStreams,
+      streamServiceIds
+    );
+    resultStreams = proxied.streams;
+    errorStreams.push(...proxied.errorStreams);
 
     [...processedTorrents.errors, ...processedNzbs.errors].forEach((error) => {
       let errMsg = error.error.message;
@@ -649,7 +467,7 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
           selected.add(metadata.primaryTitle);
         } else if (spec === 'all') {
           metadata.titlesWithLang
-            ?.slice(0, Env.BUILTIN_SCRAPE_TITLE_LIMIT)
+            ?.slice(0, appConfig.builtins.scrape.titleLimit)
             .forEach((t) => selected.add(cleanTitle(t.title)));
           break; // no need to process further specs
         } else if (spec === 'original') {
@@ -675,7 +493,7 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
       }
     } else if (options?.useAllTitles) {
       titles = metadata.titles
-        .slice(0, Env.BUILTIN_SCRAPE_TITLE_LIMIT)
+        .slice(0, appConfig.builtins.scrape.titleLimit)
         .map(cleanTitle);
     } else {
       titles = [metadata.primaryTitle];
@@ -809,17 +627,35 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
         }
       }
 
-      // Adjust for non-IMDB episodes if they exist
+
+      const parsedSeasonRecord = seasons.find(
+        (s) => s.number === parsedId.season
+      );
+      const isAlreadyAbsoluteForNonImdb =
+        parsedSeasonRecord !== undefined &&
+        Number(parsedId.episode) > parsedSeasonRecord.episodes;
+
       if (
         animeEntry?.imdb?.nonImdbEpisodes &&
         absoluteEpisode &&
-        parsedId.type === 'imdbId'
+        parsedId.type === 'imdbId' &&
+        !isAlreadyAbsoluteForNonImdb
       ) {
         const nonImdbEpisodesBefore = animeEntry.imdb.nonImdbEpisodes.filter(
           (ep) => ep < absoluteEpisode!
         ).length;
         if (nonImdbEpisodesBefore > 0) {
           absoluteEpisode += nonImdbEpisodesBefore;
+        }
+
+        if (relativeAbsoluteEpisode) {
+          const nonImdbEpisodesBeforeRelative =
+            animeEntry.imdb.nonImdbEpisodes.filter(
+              (ep) => ep < relativeAbsoluteEpisode!
+            ).length;
+          if (nonImdbEpisodesBeforeRelative > 0) {
+            relativeAbsoluteEpisode += nonImdbEpisodesBeforeRelative;
+          }
         }
       }
     }
@@ -977,6 +813,176 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
       name: `[❌] ${title}`,
       description: description,
       externalUrl: 'stremio:///',
+    };
+  }
+
+  protected async _applyServiceProxying(
+    streams: Stream[],
+    streamServiceIds: Array<BuiltinServiceId | undefined>
+  ): Promise<{ streams: Stream[]; errorStreams: Stream[] }> {
+    const errorStreams: Stream[] = [];
+
+    let resultStreams = [...streams];
+    let serviceIds = [...streamServiceIds];
+
+    let nzbdavAuth: z.infer<typeof NzbDavConfig> | undefined;
+    let altmountAuth: z.infer<typeof AltmountConfig> | undefined;
+
+    const encodedNzbdavAuth = this.userData.services.find(
+      (s) => s.id === 'nzbdav'
+    )?.credential;
+    const encodedAltmountAuth = this.userData.services.find(
+      (s) => s.id === 'altmount'
+    )?.credential;
+
+    if (encodedNzbdavAuth) {
+      const { success, data } = NzbDavConfig.safeParse(
+        JSON.parse(fromUrlSafeBase64(encodedNzbdavAuth))
+      );
+      if (success) {
+        nzbdavAuth = data;
+      }
+    }
+
+    if (encodedAltmountAuth) {
+      const { success, data } = AltmountConfig.safeParse(
+        JSON.parse(fromUrlSafeBase64(encodedAltmountAuth))
+      );
+      if (success) {
+        altmountAuth = data;
+      }
+    }
+
+    const setProxyHeaders = (
+      serviceId: BuiltinServiceId,
+      authorization?: string
+    ) => {
+      resultStreams = resultStreams.map((stream, i) => {
+        if (serviceIds[i] !== serviceId) return stream;
+
+        return {
+          ...stream,
+          behaviorHints: {
+            ...stream.behaviorHints,
+            notWebReady: true,
+            proxyHeaders: authorization
+              ? {
+                  request: {
+                    Authorization: authorization,
+                  },
+                }
+              : undefined,
+          },
+        };
+      });
+    };
+
+    const getServiceIndices = (serviceId: BuiltinServiceId): number[] =>
+      serviceIds
+        .map((id, i) => ({ id, i }))
+        .filter(({ id }) => id === serviceId)
+        .map(({ i }) => i);
+
+    const dropServiceStreams = (serviceId: BuiltinServiceId) => {
+      const keep: number[] = serviceIds
+        .map((id, i) => ({ id, i }))
+        .filter(({ id }) => id !== serviceId)
+        .map(({ i }) => i);
+      resultStreams = keep.map((i) => resultStreams[i]);
+      serviceIds = keep.map((i) => serviceIds[i]);
+    };
+
+    const nzbdavBasicAuth =
+      nzbdavAuth?.webdavUser && nzbdavAuth?.webdavPassword
+        ? `Basic ${Buffer.from(
+            `${nzbdavAuth.webdavUser}:${nzbdavAuth.webdavPassword}`
+          ).toString('base64')}`
+        : undefined;
+    const altmountBasicAuth =
+      altmountAuth?.webdavUser && altmountAuth?.webdavPassword
+        ? `Basic ${Buffer.from(
+            `${altmountAuth.webdavUser}:${altmountAuth.webdavPassword}`
+          ).toString('base64')}`
+        : undefined;
+
+    if (nzbdavAuth) {
+      setProxyHeaders('nzbdav', nzbdavBasicAuth);
+    }
+
+    if (altmountAuth) {
+      setProxyHeaders('altmount', altmountBasicAuth);
+    }
+
+    const proxyServiceStreams = async (
+      serviceId: BuiltinServiceId,
+      proxyCredential: string | undefined,
+      authorization: string | undefined,
+      errorDescription: string
+    ) => {
+      const indices = getServiceIndices(serviceId);
+      if (indices.length === 0 || !proxyCredential) return;
+
+      const proxy = createProxy({
+        id: 'builtin',
+        enabled: true,
+        credentials: proxyCredential,
+      });
+
+      const proxiedStreams = await proxy.generateUrls(
+        indices.map((i) => ({
+          url: resultStreams[i].url!,
+          filename: resultStreams[i].behaviorHints?.filename ?? undefined,
+          headers: authorization
+            ? {
+                request: {
+                  Authorization: authorization,
+                },
+              }
+            : undefined,
+        }))
+      );
+
+      if (proxiedStreams && !('error' in proxiedStreams)) {
+        for (let i = 0; i < indices.length; i++) {
+          const index = indices[i];
+          const proxiedUrl = proxiedStreams[i];
+          if (proxiedUrl) {
+            resultStreams[index].url = proxiedUrl;
+            resultStreams[index].behaviorHints = {
+              ...resultStreams[index].behaviorHints,
+              notWebReady: undefined,
+              proxyHeaders: undefined,
+            };
+          }
+        }
+      } else {
+        errorStreams.push(
+          this._createErrorStream({
+            title: `${this.name}`,
+            description: errorDescription,
+          })
+        );
+        dropServiceStreams(serviceId);
+      }
+    };
+
+    await proxyServiceStreams(
+      'nzbdav',
+      nzbdavAuth?.aiostreamsAuth,
+      nzbdavBasicAuth,
+      'Failed to proxy NzbDAV streams, ensure your proxy auth is correct.'
+    );
+
+    await proxyServiceStreams(
+      'altmount',
+      altmountAuth?.aiostreamsAuth,
+      altmountBasicAuth,
+      'Failed to proxy Altmount streams, ensure your proxy auth is correct.'
+    );
+
+    return {
+      streams: resultStreams,
+      errorStreams,
     };
   }
 }

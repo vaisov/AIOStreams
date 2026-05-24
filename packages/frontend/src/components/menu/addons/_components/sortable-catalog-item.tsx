@@ -1,4 +1,3 @@
-'use client';
 import React, { useState } from 'react';
 import { CatalogModification } from '@aiostreams/core';
 import { useUserData } from '@/context/userData';
@@ -17,11 +16,7 @@ import {
   AccordionItem,
 } from '../../../ui/accordion';
 import { BiEdit } from 'react-icons/bi';
-import {
-  LuChevronsUp,
-  LuChevronsDown,
-  LuMerge,
-} from 'react-icons/lu';
+import { LuChevronsUp, LuChevronsDown, LuMerge } from 'react-icons/lu';
 import {
   TbSearch,
   TbSearchOff,
@@ -508,7 +503,7 @@ export function SortableCatalogItem({
 
                     <Switch
                       label="Poster Services"
-                      help="Replace movie/show posters with posters from poster services (RPDB or Top Poster) when supported"
+                      help="Replace movie/show posters with posters from poster services (RPDB or TOP Posters) when supported"
                       side="right"
                       value={catalog.usePosterService ?? false}
                       onValueChange={(usePosterService) => {

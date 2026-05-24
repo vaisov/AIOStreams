@@ -6,11 +6,13 @@ import {
   StremioTransformer,
 } from '@aiostreams/core';
 import { stremioSubtitleRateLimiter } from '../../middlewares/ratelimit.js';
+import { trackResource } from '../../middlewares/analytics.js';
 
 const logger = createLogger('server');
 const router: Router = Router();
 
 router.use(stremioSubtitleRateLimiter);
+router.use(trackResource('subtitle'));
 
 interface SubtitleParams {
   type: string;
@@ -20,7 +22,11 @@ interface SubtitleParams {
 
 router.get(
   '/:type/:id{/:extras}.json',
-  async (req: Request<SubtitleParams>, res: Response<SubtitleResponse>, next: NextFunction) => {
+  async (
+    req: Request<SubtitleParams>,
+    res: Response<SubtitleResponse>,
+    next: NextFunction
+  ) => {
     if (!req.userData) {
       res.status(200).json(
         StremioTransformer.createDynamicError('subtitles', {

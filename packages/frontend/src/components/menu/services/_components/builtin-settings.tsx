@@ -1,4 +1,3 @@
-'use client';
 import { useStatus } from '@/context/status';
 import { useUserData } from '@/context/userData';
 import { SettingsCard } from '../../../shared/settings-card';
@@ -23,6 +22,7 @@ export function BuiltinSettings() {
     <>
       <SettingsCard
         title="Service Wrap"
+        id="serviceWrap"
         description="Wrap P2P results from external addons through your own debrid services, without sharing your credentials with those addons. Works with P2P-capable marketplace addons and custom addons added via a custom manifest URL."
       >
         <Switch
@@ -134,6 +134,7 @@ export function BuiltinSettings() {
 
       <SettingsCard
         title="NZB Failover"
+        id="nzbFailover"
         description="When a Usenet stream fails to play, AIOStreams will automatically try the next best NZB URLs from your sorted results. Only applies to built-in Usenet addons."
       >
         <Switch
@@ -196,6 +197,7 @@ export function BuiltinSettings() {
 
       <SettingsCard
         title="Auto Remove Downloads"
+        id="autoRemoveDownloads"
         description="Automatically removes the torrent/NZB from your debrid dashboard after generating a playback link. Only works for built-in addons and supported services — private torrents are not removed."
       >
         <Switch
@@ -210,6 +212,7 @@ export function BuiltinSettings() {
 
       <SettingsCard
         title="Check Library"
+        id="checkOwned"
         description="When enabled, built-in addons and service wrapped addons will check if search results already exist in your debrid library and mark them accordingly. This applies to both torrent and usenet results."
       >
         <Switch
@@ -224,6 +227,7 @@ export function BuiltinSettings() {
 
       <SettingsCard
         title="Cache and Play"
+        id="cacheAndPlay"
         description="Allows uncached streams to wait for the download to finish before playing, instead of showing a 'try again' message. Only works for built-in addons — recommended for Usenet since downloads typically finish quickly."
       >
         <Switch

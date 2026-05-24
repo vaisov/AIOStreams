@@ -1,13 +1,13 @@
-import { Addon, Option, UserData } from '../db/index.js';
+import { Addon, Option, PresetMetadata, UserData } from '../db/index.js';
 import { Preset, baseOptions } from './preset.js';
 import {
   Cache,
   constants,
-  Env,
   formatZodError,
   getSimpleTextHash,
   makeRequest,
 } from '../utils/index.js';
+import { config as appConfig } from '../config/index.js';
 import { z } from 'zod';
 import { FormData } from 'undici';
 
@@ -53,14 +53,15 @@ export class AICompanionPreset extends Preset {
       value: 'trending',
     },
   ];
-  static override get METADATA() {
+  static override get METADATA(): PresetMetadata {
     const supportedResources = [constants.CATALOG_RESOURCE];
 
     const options: Option[] = [
       ...baseOptions(
         'AI Companion',
         supportedResources,
-        Env.DEFAULT_AI_COMPANION_TIMEOUT
+        appConfig.presets.aiCompanion.defaultTimeout ??
+          appConfig.presets.defaultTimeout
       ),
       {
         id: 'providerBaseUrl',
@@ -168,15 +169,25 @@ export class AICompanionPreset extends Preset {
       ID: 'ai-companion',
       NAME: 'AI Companion',
       LOGO: `https://raw.githubusercontent.com/willtho89/stremio-ai-companion/refs/heads/main/.assets/logo2_256.png`,
-      URL: Env.AI_COMPANION_URL,
-      TIMEOUT: Env.DEFAULT_AI_COMPANION_TIMEOUT || Env.DEFAULT_TIMEOUT,
-      USER_AGENT: Env.DEFAULT_AI_COMPANION_USER_AGENT || Env.DEFAULT_USER_AGENT,
+      URL: appConfig.presets.aiCompanion.url,
+      TIMEOUT:
+        appConfig.presets.aiCompanion.defaultTimeout ??
+        appConfig.presets.defaultTimeout,
+      USER_AGENT:
+        appConfig.presets.aiCompanion.defaultUserAgent ??
+        appConfig.http.defaultUserAgent,
       SUPPORTED_SERVICES: [],
       DESCRIPTION: 'Your AI-powered movie and series recommendations.',
       OPTIONS: options,
       SUPPORTED_STREAM_TYPES: [],
       SUPPORTED_RESOURCES: supportedResources,
       CATEGORY: constants.PresetCategory.META_CATALOGS,
+      DISABLED: {
+        reason:
+          'Addon is archived. "This repository is archived. I highly recommend Stremio AI Search or AIOMetadata to continue using LLMs for content search."',
+        removed: true,
+        disabled: true,
+      },
     };
   }
 
@@ -184,7 +195,7 @@ export class AICompanionPreset extends Preset {
     userData: UserData,
     options: Record<string, any>
   ): Promise<Addon[]> {
-    if (!userData.tmdbAccessToken && !Env.TMDB_ACCESS_TOKEN) {
+    if (!userData.tmdbAccessToken && !appConfig.metadata.tmdb.accessToken) {
       throw new Error(
         `${this.METADATA.NAME} requires a TMDB access token to function. Please provide a valid TMDB access token in the services menu.`
       );
@@ -218,7 +229,7 @@ export class AICompanionPreset extends Preset {
     userData: UserData,
     options: Record<string, any>
   ): Promise<string> {
-    let url = (options.url || this.METADATA.URL).replace(/\/$/, '');
+    let url = (options.url || this.DEFAULT_URL).replace(/\/$/, '');
     if (url.endsWith('/manifest.json')) {
       return url;
     }
@@ -257,7 +268,7 @@ export class AICompanionPreset extends Preset {
     form.append('language', options.language || 'en-US');
     form.append(
       'tmdb_read_access_token',
-      userData.tmdbAccessToken || Env.TMDB_ACCESS_TOKEN
+      userData.tmdbAccessToken || appConfig.metadata.tmdb.accessToken
     );
     form.append('max_results', options.maxResults.toString());
 

@@ -1,8 +1,13 @@
-import z from 'zod';
+﻿import z from 'zod';
 import { UserData } from '../db/schemas.js';
-import { Env } from './env.js';
-import { SyncManager, type SyncOverride, type FetchResult } from './sync.js';
-import { createLogger } from './logger.js';
+import { config } from '../config/index.js';
+import {
+  SyncManager,
+  type SyncOverride,
+  type FetchResult,
+  parseSyncedUrl,
+} from './sync.js';
+import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('core');
 
@@ -37,21 +42,13 @@ export class RegexAccess {
    */
   private static get manager(): SyncManager<RegexPatternItem> {
     if (!this._instance) {
-      this._whitelistedPatterns =
-        Env.WHITELISTED_REGEX_PATTERNS ?? Env.ALLOWED_REGEX_PATTERNS ?? [];
+      this._whitelistedPatterns = config.userLimits.regex.patterns;
       this._description =
-        Env.WHITELISTED_REGEX_PATTERNS_DESCRIPTION ??
-        Env.ALLOWED_REGEX_PATTERNS_DESCRIPTION;
+        config.userLimits.regex.patternsDescription ?? undefined;
 
-      const configuredUrls =
-        Env.WHITELISTED_REGEX_PATTERNS_URLS ??
-        Env.ALLOWED_REGEX_PATTERNS_URLS ??
-        [];
+      const configuredUrls = config.userLimits.regex.patternsUrls;
 
-      // WHITELISTED_SYNC_REFRESH_INTERVAL (seconds), fallback to old ms value converted to seconds
-      const refreshInterval =
-        Env.WHITELISTED_SYNC_REFRESH_INTERVAL ??
-        Math.floor(Env.ALLOWED_REGEX_PATTERNS_URLS_REFRESH_INTERVAL / 1000);
+      const refreshInterval = config.userLimits.sync.refreshInterval;
 
       this._instance = new SyncManager<RegexPatternItem>({
         cacheKey: 'regex-patterns',
@@ -143,7 +140,7 @@ export class RegexAccess {
       if (allWhitelisted) return true;
     }
 
-    switch (Env.REGEX_FILTER_ACCESS) {
+    switch (config.userLimits.regex.access) {
       case 'trusted':
         return userData.trusted ?? false;
       case 'all':
@@ -176,9 +173,9 @@ export class RegexAccess {
    * - `none`    → only configured URLs
    */
   public static validateUrls(urls: string[], userData?: UserData): string[] {
+    const access = config.userLimits.regex.access;
     const isUnrestricted =
-      Env.REGEX_FILTER_ACCESS === 'all' ||
-      (Env.REGEX_FILTER_ACCESS === 'trusted' && userData?.trusted);
+      access === 'all' || (access === 'trusted' && userData?.trusted);
 
     if (isUnrestricted) return urls;
 
@@ -245,9 +242,10 @@ export class RegexAccess {
             url,
             items: [] as RegexPatternItem[],
             error:
-              Env.REGEX_FILTER_ACCESS === 'none'
+              config.userLimits.regex.access === 'none'
                 ? 'Regex sync is disabled on this instance.'
-                : Env.REGEX_FILTER_ACCESS === 'trusted' && !userData?.trusted
+                : config.userLimits.regex.access === 'trusted' &&
+                    !userData?.trusted
                   ? 'This URL is not in the allowed list. Contact the instance owner to whitelist it, or ask to be marked as a trusted user.'
                   : 'This URL is not allowed by the server configuration.',
           } satisfies FetchResult<RegexPatternItem>;
@@ -268,46 +266,86 @@ export class RegexAccess {
   /**
    * Sync regex patterns from URLs into the user's existing patterns.
    * This is the main method called by the middleware.
+   *
+   * Resolves `<SYNCED: url>` inline placeholders in-place; unplaced URLs
+   * are appended at the end. Dangling placeholders are stripped.
    */
   public static async syncRegexPatterns<U>(
     urls: string[] | undefined,
     existing: U[],
     userData: UserData,
     transform: (item: RegexPatternItem) => U,
-    uniqueKey: (item: U) => string
+    getField: (item: U) => string
   ): Promise<U[]> {
-    const patterns = await this.resolvePatterns(urls, userData);
-    if (patterns.length === 0) return existing;
+    const validUrls = urls?.length ? this.validateUrls(urls, userData) : [];
 
-    const result = [...existing];
-    const existingSet = new Set(existing.map(uniqueKey));
+    if (validUrls.length === 0) {
+      const cleaned = existing.filter(
+        (item) => !parseSyncedUrl(getField(item))
+      );
+      return cleaned.length === existing.length ? existing : cleaned;
+    }
+
+    const validUrlSet = new Set(validUrls);
+    const urlPatternMap = new Map<string, RegexPatternItem[]>();
+    await Promise.all(
+      validUrls.map(async (url) => {
+        const patterns = await this.getPatternsForUrl(url);
+        urlPatternMap.set(url, patterns);
+      })
+    );
+
+    const allPatterns = [...urlPatternMap.values()].flat();
+    if (allPatterns.length > 0) {
+      this.manager.addItems(allPatterns);
+    }
+
     const overrides: SyncOverride[] = userData.regexOverrides || [];
+    const result: U[] = [];
+    const resolvedInlineUrls = new Set<string>();
 
-    for (const regex of patterns) {
-      const override = overrides.find(
-        (o) =>
-          o.pattern === regex.pattern ||
-          (regex.name && o.originalName === regex.name)
-      );
+    const pushPatterns = (patterns: RegexPatternItem[]) => {
+      for (const regex of patterns) {
+        const override = overrides.find(
+          (o) =>
+            o.pattern === regex.pattern ||
+            (regex.name && o.originalName === regex.name)
+        );
 
-      if (override?.disabled) continue;
+        if (override?.disabled) continue;
 
-      const item = transform(
-        override
-          ? {
-              ...regex,
-              name: override.name ?? regex.name,
-              score:
-                override.score !== undefined ? override.score : regex.score,
-            }
-          : regex
-      );
-
-      const key = uniqueKey(item);
-      if (!existingSet.has(key)) {
-        result.push(item);
-        existingSet.add(key);
+        result.push(
+          transform(
+            override
+              ? {
+                  ...regex,
+                  name: override.name ?? regex.name,
+                  score:
+                    override.score !== undefined ? override.score : regex.score,
+                }
+              : regex
+          )
+        );
       }
+    };
+
+    for (const item of existing) {
+      const placeholderUrl = parseSyncedUrl(getField(item));
+
+      if (placeholderUrl) {
+        if (validUrlSet.has(placeholderUrl)) {
+          resolvedInlineUrls.add(placeholderUrl);
+          pushPatterns(urlPatternMap.get(placeholderUrl) ?? []);
+        }
+        continue;
+      }
+
+      result.push(item);
+    }
+
+    for (const url of validUrls) {
+      if (resolvedInlineUrls.has(url)) continue;
+      pushPatterns(urlPatternMap.get(url) ?? []);
     }
 
     return result;

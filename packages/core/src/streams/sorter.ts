@@ -1,9 +1,5 @@
 import { ParsedStream, SortCriterion, UserData } from '../db/schemas.js';
-import {
-  createLogger,
-  getTimeTakenSincePoint,
-  constants,
-} from '../utils/index.js';
+import { createLogger, constants } from '../utils/index.js';
 import { StreamContext } from './index.js';
 
 const logger = createLogger('sorter');
@@ -78,8 +74,8 @@ class StreamSorter {
       primarySortCriteria.length > 0 &&
       primarySortCriteria[0].key === 'cached'
     ) {
-      logger.info(
-        'Splitting streams into cached and uncached and using separate sort criteria'
+      logger.debug(
+        'splitting streams into cached and uncached with separate sort criteria'
       );
       const cachedStreams = streams.filter(
         (stream) => stream.service?.cached || stream.service === undefined // streams without a service can be considered as 'cached'
@@ -115,9 +111,7 @@ class StreamSorter {
         sortedStreams = [...uncachedSorted, ...cachedSorted];
       }
     } else {
-      logger.debug(
-        `using sort criteria: ${JSON.stringify(primarySortCriteria)}`
-      );
+      logger.debug({ criteria: primarySortCriteria }, 'using sort criteria');
       sortedStreams = streams.slice().sort((a, b) => {
         const aKey = this.dynamicSortKey(a, primarySortCriteria, type);
         const bKey = this.dynamicSortKey(b, primarySortCriteria, type);
@@ -137,10 +131,14 @@ class StreamSorter {
     if (pinnedToBottomStreams.length > 0) {
       pinnedParts.push(`${pinnedToBottomStreams.length} pinned to bottom`);
     }
-    logger.info(
-      `Sorted ${sortedStreams.length}${
-        pinnedParts.length > 0 ? ` + ${pinnedParts.join(', ')}` : ''
-      } streams in ${getTimeTakenSincePoint(start)}`
+    logger.debug(
+      {
+        sorted: sortedStreams.length,
+        pinnedTop: pinnedToTopStreams.length,
+        pinnedBottom: pinnedToBottomStreams.length,
+        took: Date.now() - start,
+      },
+      'sort complete'
     );
     return [...pinnedToTopStreams, ...sortedStreams, ...pinnedToBottomStreams];
   }
@@ -148,7 +146,7 @@ class StreamSorter {
   private dynamicSortKey(
     stream: ParsedStream,
     sortCriteria: SortCriterion[],
-    type: string
+    _type: string
   ): any[] {
     function keyValue(sortCriterion: SortCriterion, userData: UserData) {
       const { key, direction } = sortCriterion;
@@ -292,6 +290,22 @@ class StreamSorter {
             }
           }
           return multiplier * -minLanguageIndex;
+        }
+        case 'subtitle': {
+          let minSubtitleIndex = userData.preferredSubtitles?.length;
+          if (minSubtitleIndex === undefined) {
+            return 0;
+          }
+          const effectiveSubtitles = stream.parsedFile?.subtitles?.length
+            ? stream.parsedFile.subtitles
+            : ['Unknown'];
+          for (const subtitle of effectiveSubtitles) {
+            const idx = userData.preferredSubtitles?.indexOf(subtitle as any);
+            if (idx !== undefined && idx !== -1 && idx < minSubtitleIndex) {
+              minSubtitleIndex = idx;
+            }
+          }
+          return multiplier * -minSubtitleIndex;
         }
         case 'regexPatterns':
           return (

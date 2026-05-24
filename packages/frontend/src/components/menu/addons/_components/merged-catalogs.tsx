@@ -1,4 +1,3 @@
-'use client';
 import React, { useState } from 'react';
 import { MergedCatalog } from '@aiostreams/core';
 import { useStatus } from '@/context/status';
@@ -246,6 +245,9 @@ export function MergedCatalogsCard() {
     setUserData((prev) => ({
       ...prev,
       mergedCatalogs: (prev.mergedCatalogs || []).filter((mc) => mc.id !== id),
+      catalogModifications: (prev.catalogModifications || []).filter(
+        (mod) => mod.id !== id
+      ),
     }));
     toast.success('Merged catalog deleted');
   };
@@ -253,6 +255,7 @@ export function MergedCatalogsCard() {
   return (
     <SettingsCard
       title="Merged Catalogs"
+      id="mergedCatalogs"
       description="Combine multiple catalogs into a single merged catalog. Useful for creating custom collections from different sources."
       action={
         <IconButton

@@ -6,8 +6,12 @@ import {
   StremioTransformer,
 } from '@aiostreams/core';
 
+import { trackResource } from '../../middlewares/analytics.js';
+
 const logger = createLogger('server');
 const router: Router = Router();
+
+router.use(trackResource('addon_catalog'));
 
 interface AddonCatalogParams {
   type: string;
@@ -16,7 +20,11 @@ interface AddonCatalogParams {
 
 router.get(
   '/:type/:id.json',
-  async (req: Request<AddonCatalogParams>, res: Response<AddonCatalogResponse>, next) => {
+  async (
+    req: Request<AddonCatalogParams>,
+    res: Response<AddonCatalogResponse>,
+    next
+  ) => {
     if (!req.userData) {
       res.status(200).json({
         addons: [

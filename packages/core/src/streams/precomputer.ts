@@ -1,9 +1,7 @@
-import { isMatch } from 'super-regex';
 import { ParsedStream, UserData } from '../db/schemas.js';
 import {
   createLogger,
   RegexAccess,
-  getTimeTakenSincePoint,
   formRegexFromKeywords,
   compileRegex,
   parseRegex,
@@ -119,17 +117,16 @@ class StreamPrecomputer {
       context
     );
     const totalMs = Date.now() - start;
-    const skippedInfo = skipPerStreamIds
-      ? ` (skipped ${skipPerStreamIds.size} pre-computed)`
-      : '';
-    const subParts: string[] = [];
-    if (preferredRegexMs > 0) subParts.push(`prefRegex=${preferredRegexMs}ms`);
-    if (rankedRegexMs > 0) subParts.push(`rankedRegex=${rankedRegexMs}ms`);
-    if (rankedSELMs > 0) subParts.push(`rankedSEL=${rankedSELMs}ms`);
-    if (preferredSELMs > 0) subParts.push(`prefSEL=${preferredSELMs}ms`);
-    logger.info(
-      `Precompute: ${getTimeTakenSincePoint(start)}${skippedInfo}` +
-        (subParts.length > 0 ? `  [${subParts.join('  ')}]` : '')
+    logger.debug(
+      {
+        took: totalMs,
+        skipped: skipPerStreamIds?.size ?? 0,
+        preferredRegexMs,
+        rankedRegexMs,
+        rankedSELMs,
+        preferredSELMs,
+      },
+      'precompute complete'
     );
     // Accumulate into per-request totals (mirrors how filterer accumulates filterTimings)
     this.accumulatedTimings.preferredRegexMs += preferredRegexMs;
@@ -164,14 +161,15 @@ class StreamPrecomputer {
 
     const selector = new StreamSelector(context.toExpressionContext());
 
-    // Initialize all streams with a score of 0
-    const streamScores = new Map<string, number>();
-    const streamExpressionNames = new Map<string, string[]>();
+    // initialise each stream's score and match list, and build an id -> stream
+    // map so we can resolve back to original references after selector.select()
+    const streamsById = new Map<string, ParsedStream>();
     for (const stream of streams) {
-      streamScores.set(stream.id, 0);
+      stream.streamExpressionScore = 0;
+      stream.rankedStreamExpressionsMatched = [];
+      streamsById.set(stream.id, stream);
     }
 
-    // Evaluate each ranked expression and accumulate scores
     for (const { expression, score, enabled } of this.userData
       .rankedStreamExpressions) {
       if (enabled === false) {
@@ -180,43 +178,38 @@ class StreamPrecomputer {
 
       try {
         const selectedStreams = await selector.select(streams, expression);
+        const exprNames = extractNamesFromExpression(expression);
 
-        // Add the score to each matched stream
-        for (const stream of selectedStreams) {
-          const currentScore = streamScores.get(stream.id) ?? 0;
-          streamScores.set(stream.id, currentScore + score);
-          const exprNames = extractNamesFromExpression(expression);
+        for (const selected of selectedStreams) {
+          const stream = streamsById.get(selected.id);
+          if (!stream) continue;
+          stream.streamExpressionScore =
+            (stream.streamExpressionScore ?? 0) + score;
           if (exprNames) {
-            const existingNames = streamExpressionNames.get(stream.id) || [];
-            streamExpressionNames.set(stream.id, [
-              ...existingNames,
+            stream.rankedStreamExpressionsMatched = [
+              ...(stream.rankedStreamExpressionsMatched ?? []),
               ...exprNames,
-            ]);
+            ];
           }
         }
       } catch (error) {
         logger.error(
-          `Failed to apply ranked stream expression "${expression}": ${
-            error instanceof Error ? error.message : String(error)
-          }`
+          {
+            expression,
+            err: error instanceof Error ? error.message : String(error),
+          },
+          'failed to apply ranked stream expression'
         );
       }
-    }
-
-    // Apply the computed scores to the streams
-    for (const stream of streams) {
-      stream.streamExpressionScore = streamScores.get(stream.id) ?? 0;
-      stream.rankedStreamExpressionsMatched = streamExpressionNames.get(
-        stream.id
-      );
     }
 
     const nonZeroScores = streams.filter(
       (s) => (s.streamExpressionScore ?? 0) !== 0
     ).length;
 
-    logger.info(
-      `Computed ranked expression scores for ${streams.length} streams (${nonZeroScores} with non-zero scores) in ${getTimeTakenSincePoint(start)}`
+    logger.debug(
+      { streams: streams.length, nonZeroScores, took: Date.now() - start },
+      'ranked stream expressions computed'
     );
     return Date.now() - start;
   }
@@ -248,7 +241,10 @@ class StreamPrecomputer {
       const matched: string[] = [];
       let totalScore = 0;
       for (const { regex, pattern, name, score } of regexes) {
-        if (regex.test(stream.filename)) {
+        if (
+          regex.test(stream.filename) ||
+          (stream.folderName && regex.test(stream.folderName))
+        ) {
           if (name) matched.push(name);
           totalScore += score;
         }
@@ -259,10 +255,13 @@ class StreamPrecomputer {
       }
     }
 
-    logger.info(
-      `Computed ranked regex patterns for ${
-        streams.filter((s) => s.rankedRegexesMatched?.length).length
-      } streams in ${getTimeTakenSincePoint(start)}`
+    logger.debug(
+      {
+        matched: streams.filter((s) => s.rankedRegexesMatched?.length).length,
+        streams: streams.length,
+        took: Date.now() - start,
+      },
+      'ranked regex patterns computed'
     );
     return Date.now() - start;
   }
@@ -286,17 +285,20 @@ class StreamPrecomputer {
       seadexResult.bestGroups.size === 0 &&
       seadexResult.allGroups.size === 0
     ) {
-      logger.debug(`No SeaDex releases found for AniList ID ${anilistId}`);
+      logger.debug({ anilistId }, 'no seadex releases found');
       return;
     }
 
-    logger.debug(`Applying SeaDex tags for anime`, {
-      anilistId,
-      bestHashes: Array.from(seadexResult.bestHashes),
-      allHashes: Array.from(seadexResult.allHashes),
-      bestGroups: Array.from(seadexResult.bestGroups),
-      allGroups: Array.from(seadexResult.allGroups),
-    });
+    logger.debug(
+      {
+        anilistId,
+        bestHashes: Array.from(seadexResult.bestHashes),
+        allHashes: Array.from(seadexResult.allHashes),
+        bestGroups: Array.from(seadexResult.bestGroups),
+        allGroups: Array.from(seadexResult.allGroups),
+      },
+      'applying seadex tags'
+    );
     let seadexBestCount = 0;
     let seadexCount = 0;
     let seadexGroupFallbackCount = 0;
@@ -354,8 +356,14 @@ class StreamPrecomputer {
     }
 
     if (seadexCount > 0) {
-      logger.info(
-        `Tagged ${seadexCount} streams as SeaDex releases (${seadexBestCount} best, ${seadexGroupFallbackCount} via group fallback) for AniList ID ${anilistId}`
+      logger.debug(
+        {
+          tagged: seadexCount,
+          best: seadexBestCount,
+          groupFallback: seadexGroupFallbackCount,
+          anilistId,
+        },
+        'seadex tagging complete'
       );
     }
   }
@@ -406,13 +414,12 @@ class StreamPrecomputer {
     if (preferredKeywordsPatterns) {
       streamsToProcess.forEach((stream) => {
         stream.keywordMatched =
-          isMatch(preferredKeywordsPatterns, stream.filename || '') ||
-          isMatch(preferredKeywordsPatterns, stream.folderName || '') ||
-          isMatch(
-            preferredKeywordsPatterns,
+          preferredKeywordsPatterns.test(stream.filename || '') ||
+          preferredKeywordsPatterns.test(stream.folderName || '') ||
+          preferredKeywordsPatterns.test(
             stream.parsedFile?.releaseGroup || ''
           ) ||
-          isMatch(preferredKeywordsPatterns, stream.indexer || '');
+          preferredKeywordsPatterns.test(stream.indexer || '');
       });
     }
     const determineMatch = (
@@ -420,7 +427,7 @@ class StreamPrecomputer {
       regexPattern: { pattern: RegExp; negate: boolean },
       attribute?: string
     ) => {
-      return attribute ? isMatch(regexPattern.pattern, attribute) : false;
+      return attribute ? regexPattern.pattern.test(attribute) : false;
     };
     if (preferredRegexPatterns) {
       streamsToProcess.forEach((stream) => {
@@ -505,9 +512,11 @@ class StreamPrecomputer {
           }
         } catch (error) {
           logger.error(
-            `Failed to apply preferred stream expression "${expression}": ${
-              error instanceof Error ? error.message : String(error)
-            }`
+            {
+              expression,
+              err: error instanceof Error ? error.message : String(error),
+            },
+            'failed to apply preferred stream expression'
           );
         }
       }
