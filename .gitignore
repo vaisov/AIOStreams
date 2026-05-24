@@ -5,6 +5,7 @@ out/
 .next/
 next-env.d.ts
 .wrangler/
+wrangler.local.toml
 .env
 metadata.json
 data/

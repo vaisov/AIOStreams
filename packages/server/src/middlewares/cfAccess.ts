@@ -200,12 +200,10 @@ export const cfAccessMiddleware = async (
       exp: verifyResult.payload.exp,
     };
 
-    if (Env.LOG_SENSITIVE_INFO) {
-      logger.debug('CF Access JWT authentication successful', {
-        email: verifyResult.payload.email,
-        path: req.path,
-      });
-    }
+    logger.debug('CF Access JWT authentication successful', {
+      sub: verifyResult.payload.sub,
+      path: req.path,
+    });
 
     return next();
   } catch (error) {
